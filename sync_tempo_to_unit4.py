@@ -251,7 +251,7 @@ def ask_for_arbauft(worklog: TempoWorklog, mapping: dict) -> str | None:
     return arbauft
 
 
-async def sync(week: str, cutover: str | None, execute: bool, end: str | None = None):
+async def sync(week: str, cutover: str | None, execute: bool, end: str | None = None, limit: int | None = None):
     """Main sync function."""
     dry_run = not execute
     mode = "EXECUTE" if execute else "DRY-RUN"
@@ -322,6 +322,11 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
                 valid_worklogs.append(wl)
             else:
                 skipped_count += 1
+
+    # Apply limit (for testing with first N entries)
+    if limit is not None and len(valid_worklogs) > limit:
+        valid_worklogs = sorted(valid_worklogs, key=lambda x: (x.date, x.issue_key))[:limit]
+        print(f"[!] --limit {limit}: only first {limit} entries will be synced")
 
     # Show summary
     print()
@@ -527,6 +532,7 @@ Examples:
     parser.add_argument(
         "--check", action="store_true", help="Check connectivity to all services and exit"
     )
+    parser.add_argument("--limit", type=int, help="Only sync the first N entries (for testing)")
 
     args = parser.parse_args()
 
@@ -552,7 +558,7 @@ Examples:
         print(f"Error: Invalid cutover format '{args.cutover}'. Expected YYYY-MM-DD")
         return 1
 
-    asyncio.run(sync(week, args.cutover, args.execute, args.end))
+    asyncio.run(sync(week, args.cutover, args.execute, args.end, args.limit))
     return 0
 
 
