@@ -684,6 +684,113 @@ class Unit4Browser:
         print("OK")
         return True
 
+    async def _wait_for_enabled(self, frame: Frame, selector: str, timeout_s: float = 3.0) -> bool:
+        """Poll until an element is not disabled. Checks only the disabled
+        attribute (the aspNetDisabled class can persist as a CSS marker even
+        when the input is interactive)."""
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                elem = frame.locator(selector).first
+                if await elem.count() > 0:
+                    is_disabled = await elem.evaluate("el => el.disabled")
+                    if not is_disabled:
+                        return True
+            except Exception:
+                pass
+            await asyncio.sleep(0.1)
+        return False
+
+    async def fill_open_dialog(self, worklog: TempoWorklog) -> dict:
+        """Fill ArbAuft/Text/Ticketno in an ALREADY-OPEN Zeiteingabe dialog.
+
+        The user is responsible for opening the dialog (Add + Zoom on the new
+        row in the browser). This avoids the row-selection bug where
+        scripted .first/.last zoom hits the wrong row.
+
+        Targets dialog-scoped inputs by their unique field codes from the
+        ground-truth dump in debug_dialog_inputs.py:
+          - ArbAuft  : input[id*='1678_Editor'] (dialog field code, NOT 1574)
+          - Aktivität: input[id*='1680_Editor'] (dialog, NOT 1576) — skipped
+          - Ticketno : input[id*='1688_Editor']
+          - Text     : the description_i input that is NOT disabled (the
+                       dialog has multiple description_i inputs, only one
+                       enabled)
+        """
+        description = worklog.description.strip() if worklog.description else worklog.issue_summary
+        # Total length budget: "[WL:NNNNN] " (~12 chars) + truncated description.
+        text = f"[WL:{worklog.worklog_id}] {description[:35]}"
+
+        result = {
+            "arbauft": False,
+            "aktivitaet": None,  # always manual
+            "text": False,
+            "ticketno": False,
+            "hours": False,
+            "dialog_open": True,  # caller asserts dialog is open
+            "expected_text": text,
+        }
+
+        frame = await self.frame_manager.get_content_frame()
+
+        # ArbAuft — dialog field code 1678
+        result["arbauft"] = await self._fill_field_by_id(
+            frame, "input[id*='1678_Editor']:not([disabled])", worklog.arbauft
+        )
+
+        # Wait for Aktivität input to be enabled (ArbAuft postback). Polls
+        # up to 4s with 0.1s steps — proceeds as soon as enabled.
+        await self._wait_for_enabled(frame, "input[id*='1680_Editor']", timeout_s=4.0)
+
+        # Aktivität — type "TEMPO" character by character so the combobox
+        # autocomplete filters per keystroke. Avoids the NOTEMPO substring
+        # snap. User verifies in the browser before clicking OK.
+        try:
+            akt = frame.locator("input[id*='1680_Editor']:not([disabled])").first
+            if await akt.count() > 0:
+                await akt.click(timeout=TIMEOUT)
+                await akt.press("Control+a")
+                await self.page.keyboard.type("TEMPO", delay=20)
+                await self.page.keyboard.press("Tab")
+                result["aktivitaet"] = True
+        except Exception:
+            result["aktivitaet"] = None  # falls through to manual
+
+        # Text — pick the one description_i that is enabled
+        result["text"] = await self._fill_field_by_id(
+            frame, "input[id*='description_i']:not([disabled])", text
+        )
+
+        # Ticketno — dialog field code 1688
+        result["ticketno"] = await self._fill_field_by_id(
+            frame, "input[id*='1688_Editor']:not([disabled])", worklog.issue_key
+        )
+
+        # Hours — use the proven _fill_hours_by_date flow which expands
+        # Zeitdetails, double-clicks the day cell, and fills the input that
+        # appears. Title-based selector on grid inputs does not work because
+        # those inputs are hidden behind the open dialog.
+        try:
+            result["hours"] = await self._fill_hours_by_date(frame, worklog.hours, worklog.date)
+        except Exception:
+            result["hours"] = False
+
+        return result
+
+    async def wait_for_dialog_to_close(self, timeout_s: float = 60.0) -> bool:
+        """Poll until the Add button reappears (= user clicked OK and dialog closed)."""
+        frame = await self.frame_manager.get_content_frame()
+        add_btn = frame.locator("button[id$='_newButton']").first
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                if await add_btn.count() > 0 and await add_btn.is_visible(timeout=300):
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(0.4)
+        return False
+
     async def _fill_field(self, frame: Frame, label: str, value: str) -> bool:
         """Fill a form field by its label."""
         label_variants = [label, f"{label}*", f"{label} *"]
@@ -915,11 +1022,17 @@ class Unit4Browser:
             pass
         return False
 
-    async def _fill_field_by_id(self, frame: Frame, selector: str, value: str) -> bool:
-        """Fill a form field by CSS selector (typically ID-based)."""
+    async def _fill_field_by_id(self, frame: Frame, selector: str, value: str, use_last: bool = False) -> bool:
+        """Fill a form field by CSS selector (typically ID-based).
+
+        use_last=True picks the last matching element instead of the first —
+        useful when a new row is appended at the bottom of a grid and the
+        first match is an old locked row.
+        """
         try:
-            elem = frame.locator(selector).first
-            if await elem.count() > 0 and await elem.first.is_visible(timeout=500):
+            base = frame.locator(selector)
+            elem = base.last if use_last else base.first
+            if await elem.count() > 0 and await elem.is_visible(timeout=500):
                 await elem.click(timeout=TIMEOUT)
                 await asyncio.sleep(0.2)
                 await elem.press("Control+a")

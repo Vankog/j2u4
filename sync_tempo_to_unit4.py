@@ -251,7 +251,115 @@ def ask_for_arbauft(worklog: TempoWorklog, mapping: dict) -> str | None:
     return arbauft
 
 
-async def sync(week: str, cutover: str | None, execute: bool, end: str | None = None, limit: int | None = None):
+async def sync_semi_auto(week: str, valid_worklogs: list, config: dict):
+    """Semi-automatic flow: per worklog, fill non-hours fields, then wait
+    for user to enter hours and click OK in the browser."""
+    print()
+    print("=" * 70)
+    print(f"SEMI-AUTO SYNC | Week {week} | {len(valid_worklogs)} entries")
+    print("=" * 70)
+    print()
+    print("Ablauf pro Eintrag:")
+    print("  1. Skript zeigt Details")
+    print("  2. DU klickst im Browser: Ergänzen + Zoom auf der neuen Zeile")
+    print("  3. ENTER in der Shell → Skript füllt ArbAuft/Text/Ticketno")
+    print("  4. DU wählst Aktivität (TEMPO), trägst Stunden ein, klickst OK")
+    print("  5. ENTER in der Shell → nächster Eintrag")
+    print()
+    print("Steuerung: [ENTER]=weiter, s=skip, q=quit")
+    print()
+
+    async with Unit4Browser(config) as unit4:
+        await unit4.navigate_to_zeiterfassung()
+        if not await unit4.set_week(week):
+            await asyncio.sleep(2)
+            await unit4.set_week(week)
+        if not await unit4.wait_for_ready():
+            print("[!] Woche ist nicht editierbar (eingereicht?). Abbruch.")
+            return
+
+        sorted_wls = sorted(valid_worklogs, key=lambda w: (w.date, w.issue_key))
+        total = len(sorted_wls)
+        done = 0
+        skipped = 0
+
+        for idx, wl in enumerate(sorted_wls, 1):
+            description = (wl.description or wl.issue_summary or "").strip()
+            text_preview = f"[WL:{wl.worklog_id}] {description[:60]}"
+            print(f"[{idx}/{total}] {wl.issue_key} | {wl.hours:.2f}h | {wl.date}")
+            print(f"        ArbAuft : {wl.arbauft}")
+            print(f"        Aktivität: TEMPO")
+            print(f"        Text    : {text_preview}")
+
+            choice = (await asyncio.get_event_loop().run_in_executor(
+                None, lambda: input("        > Ergänzen+Zoom im Browser, dann [ENTER]=fill, s=skip, q=quit: ")
+            )).strip().lower()
+            if choice == "q":
+                print("        Abbruch durch User.")
+                break
+            if choice == "s":
+                print("        übersprungen.")
+                skipped += 1
+                print()
+                continue
+
+            print("        Skript füllt Dialog-Felder...", flush=True)
+            result = await unit4.fill_open_dialog(wl)
+
+            def mark(ok) -> str:
+                if ok is None:
+                    return "MANUELL"
+                return "OK  " if ok else "FAIL"
+
+            print(f"          ArbAuft  : {mark(result['arbauft'])}")
+            print(f"          Aktivität: {mark(result['aktivitaet'])}  (PRÜFEN: TEMPO, ggf. korrigieren)")
+            print(f"          Text     : {mark(result['text'])}")
+            print(f"          Ticketno : {mark(result['ticketno'])}")
+            print(f"          Stunden  : {mark(result['hours'])}  (PRÜFEN im Browser!)")
+
+            if not result["dialog_open"]:
+                print("        [!] Dialog konnte nicht geöffnet werden. Bitte manuell anlegen.")
+                input("        > ENTER wenn Eintrag manuell fertig ist: ")
+                done += 1
+                print()
+                continue
+
+            failed_fields = [k for k in ("arbauft", "text", "ticketno", "hours") if not result[k]]
+            if failed_fields:
+                print(f"        [!] BITTE NACHTRAGEN: {', '.join(failed_fields)}")
+            print(f"        >>> Im Browser prüfen, ggf. korrigieren, OK klicken")
+            input("        > ENTER wenn Dialog im Browser geschlossen: ")
+            done += 1
+            print()
+
+        print()
+        print("=" * 50)
+        print("SEMI-AUTO SUMMARY")
+        print("=" * 50)
+        print(f"  Bearbeitet: {done}")
+        print(f"  Skipped:    {skipped}")
+        print(f"  Verbleibend: {total - done - skipped}")
+        print()
+        print("=" * 60)
+        print(">>> WICHTIG: SAVE/SPEICHERN im Browser klicken!")
+        print(">>> Ohne Save sind ALLE Einträge weg sobald der Browser schließt.")
+        print("=" * 60)
+        loop = asyncio.get_event_loop()
+        while True:
+            try:
+                answer = (await loop.run_in_executor(
+                    None, lambda: input("    >>> Hast du SAVE geklickt? [j=ja, schließen / n=nein, warten]: ")
+                )).strip().lower()
+            except EOFError:
+                await asyncio.sleep(5)
+                continue
+            if answer in ("j", "ja", "y", "yes"):
+                print("    OK — Browser wird geschlossen.")
+                break
+            print("    Browser bleibt offen. Klick SAVE, dann nochmal abfragen.")
+
+
+async def sync(week: str, cutover: str | None, execute: bool, end: str | None = None, limit: int | None = None, days: list[str] | None = None):
     """Main sync function."""
     dry_run = not execute
     mode = "EXECUTE" if execute else "DRY-RUN"
@@ -323,6 +431,13 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
             else:
                 skipped_count += 1
 
+    # Filter to specific days if requested
+    if days:
+        day_set = set(days)
+        before = len(valid_worklogs)
+        valid_worklogs = [w for w in valid_worklogs if w.date in day_set]
+        print(f"[!] --day filter: {len(valid_worklogs)}/{before} entries match {sorted(day_set)}")
+
     # Apply limit (for testing with first N entries)
     if limit is not None and len(valid_worklogs) > limit:
         valid_worklogs = sorted(valid_worklogs, key=lambda x: (x.date, x.issue_key))[:limit]
@@ -343,6 +458,11 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
     if not valid_worklogs:
         print()
         print("[*] No worklogs to sync. Done.")
+        return
+
+    # Semi-auto flow when --day is used (and not dry-run)
+    if days and not dry_run:
+        await sync_semi_auto(week, valid_worklogs, config)
         return
 
     # Connect to Unit4
@@ -533,6 +653,13 @@ Examples:
         "--check", action="store_true", help="Check connectivity to all services and exit"
     )
     parser.add_argument("--limit", type=int, help="Only sync the first N entries (for testing)")
+    parser.add_argument(
+        "--day",
+        action="append",
+        metavar="YYYY-MM-DD",
+        help="Sync only worklogs on this date (repeatable). Triggers semi-automatic mode: "
+        "script fills ArbAuft/Aktivität/Text/Ticketno, you enter hours and click OK manually.",
+    )
 
     args = parser.parse_args()
 
@@ -558,7 +685,9 @@ Examples:
         print(f"Error: Invalid cutover format '{args.cutover}'. Expected YYYY-MM-DD")
         return 1
 
-    asyncio.run(sync(week, args.cutover, args.execute, args.end, args.limit))
+    # In semi-auto (--day) mode, --execute is implicit (no dry-run for individual days)
+    execute = args.execute or bool(args.day)
+    asyncio.run(sync(week, args.cutover, execute, args.end, args.limit, args.day))
     return 0
 
 
