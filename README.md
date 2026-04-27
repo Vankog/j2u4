@@ -144,11 +144,29 @@ This tests Jira, Tempo, and Unit4 connectivity before syncing.
 # Dry-run (default) - shows what would happen
 ./sync 202605
 
-# Execute - actually creates entries
+# Execute - actually creates entries (runs fully unattended)
 ./sync 202605 --execute
 ```
 
 The week format is `YYYYWW` (ISO week number), e.g., `202605` = Week 5 of 2026.
+
+`--execute` runs end-to-end without user interaction: open browser, delete old
+`[WL:]` entries, create new ones, save. The only situation that requires manual
+input is when the script encounters a Tempo Account it does not yet know — see
+[Account Mappings](#account-mappings) for the one-time learning step.
+
+### Other options
+
+```bash
+# Limit to first N entries (sorted by date, ticket) — useful for testing
+./sync 202605 --limit 3 --execute
+
+# Extend the week's end date (e.g. include weekend bookings)
+./sync 202605 --end 2026-02-08 --execute
+
+# Cutover: only sync from this date onwards within the week
+./sync 202605 --cutover 2026-02-03 --execute
+```
 
 ### What the script does
 
@@ -174,8 +192,17 @@ This allows tracking which Unit4 entries were synced from which Tempo worklog.
 | `setup.sh` | One-time setup (creates venv, installs dependencies) |
 | `sync` | Wrapper script for syncing (use this!) |
 | `build-mapping` | Wrapper script for building mappings |
-| `sync_tempo_to_unit4.py` | Main sync script (Python) |
+| `sync_tempo_to_unit4.py` | Main sync entry point (CLI) |
+| `unit4_browser.py` | Playwright-based Unit4 browser automation |
 | `build_mapping_from_history.py` | Build account→arbauft mapping from Unit4 history |
+| `clients.py` | Jira and Tempo API clients |
+| `models.py` | Dataclasses (TempoWorklog, Unit4Entry, SyncConfig, …) |
+| `patterns.py` | Centralized regex patterns |
+| `utils.py` | Shared helpers (config loading, dates, …) |
+| `inspect_ui.py` | UI inspector — dumps Unit4 element attributes to `ui_inspection.json` |
+| `debug_dialog_inputs.py` | One-shot dialog inspector — dumps input IDs from the Add+Zoom dialog |
+| `test_patterns.py` | Offline pytest suite (regex + locale config) |
+| `test_jira_connection.py` | Manual Jira/Tempo connectivity test script |
 | `config.json` | Credentials (gitignored!) |
 | `config.example.json` | Template for config.json |
 | `account_to_arbauft_mapping.json` | Account to ArbAuft mapping (gitignored!) |
@@ -245,6 +272,9 @@ It's the "ArbAuft" field in the entry form.
 | `./sync YYYYWW` | Dry-run sync for week (e.g., `./sync 202606`) |
 | `./sync YYYYWW --execute` | Actually sync the week |
 | `./sync YYYYWW --cutover YYYY-MM-DD --execute` | Sync from cutover date onwards |
+| `./sync YYYYWW --end YYYY-MM-DD --execute` | Extend the week's end date (e.g. include weekend) |
+| `./sync YYYYWW --limit N --execute` | Sync only the first N entries (testing) |
+| `./sync YYYYWW --day YYYY-MM-DD` | **Fallback** semi-auto mode (see Troubleshooting) |
 | `./build-mapping` | Build mappings from last 8 weeks |
 | `./build-mapping --weeks N` | Build mappings from last N weeks |
 | `./build-mapping --from YYYYWW --to YYYYWW` | Build mappings from specific range |
@@ -276,6 +306,19 @@ It's the "ArbAuft" field in the entry form.
 ### Session expired
 - The script will detect this and prompt for re-login
 - If issues persist, delete `session.json` and run again
+
+### Bulk `--execute` gets stuck on a specific day
+The bulk flow normally runs unattended. If a single day trips it up
+(unusual UI state, stale dialog, etc.), fall back to per-day semi-automatic
+mode with `--day` — the script fills ArbAuft / Activity / Text / Ticketno,
+you enter hours and click OK manually:
+
+```bash
+./sync 202605 --day 2026-02-02
+./sync 202605 --day 2026-02-02 --day 2026-02-03
+```
+
+`--day` implies `--execute` (no dry-run for individual days).
 
 ### Unit4 language
 - The browser automation works with both **German** and **English** Unit4 UI
