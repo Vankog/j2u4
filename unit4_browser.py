@@ -1,11 +1,17 @@
 """Unit4 browser automation for time entry management."""
 
 import asyncio
+import dataclasses
+import json
 import os
 import re
+import shutil
+import traceback
 from datetime import datetime
+from pathlib import Path
 
-from playwright.async_api import Frame, Page, async_playwright, BrowserContext
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import Frame, Page, Request, async_playwright, BrowserContext
 
 from models import TempoWorklog, Unit4Entry
 from patterns import Patterns
@@ -95,6 +101,18 @@ class Unit4Browser:
         self._page: Page | None = None
         self._frame_manager: FrameManager | None = None
 
+        debug_cfg = config.get("debug", {}) or {}
+        self._capture_enabled: bool = bool(debug_cfg.get("capture_enabled", True))
+        self._capture_dir: Path = Path(debug_cfg.get("capture_dir", "./captures"))
+        self._capture_cap: int = int(debug_cfg.get("capture_cap", 10))
+        self._capture_video: bool = bool(debug_cfg.get("capture_video", True))
+        self._capture_run_dir: Path | None = None
+        self._capture_count: int = 0
+        self._tracing_active: bool = False
+        self._chunk_active: bool = False
+        self._page_errors: list[dict] = []
+        self._failed_requests: list[dict] = []
+
     @property
     def page(self) -> Page:
         if not self._page:
@@ -115,24 +133,197 @@ class Unit4Browser:
             args=["--start-maximized"],
         )
 
+        # Capture run dir (created lazily even if no failures occur, because
+        # record_video_dir must be set at new_context() time and Playwright
+        # writes one .webm per page regardless).
+        ctx_kwargs: dict = {"no_viewport": True, "locale": "de"}
         if os.path.exists(SESSION_FILE):
-            self._context = await self._browser.new_context(
-                storage_state=SESSION_FILE,
-                no_viewport=True,
-                locale='de',
-            )
-        else:
-            self._context = await self._browser.new_context(no_viewport=True, locale='de')
+            ctx_kwargs["storage_state"] = SESSION_FILE
+        if self._capture_enabled:
+            ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+            self._capture_run_dir = self._capture_dir / f"RUN_{ts}"
+            self._capture_run_dir.mkdir(parents=True, exist_ok=True)
+            if self._capture_video:
+                ctx_kwargs["record_video_dir"] = str(self._capture_run_dir)
+                # no_viewport=True requires explicit record_video_size
+                ctx_kwargs["record_video_size"] = {"width": 1280, "height": 720}
+
+        self._context = await self._browser.new_context(**ctx_kwargs)
+
+        if self._capture_enabled:
+            try:
+                await self._context.tracing.start(
+                    screenshots=True, snapshots=True, sources=True
+                )
+                self._tracing_active = True
+            except Exception as e:
+                print(f"[!] tracing start failed: {e} — continuing without capture")
+                self._tracing_active = False
 
         self._page = await self._context.new_page()
         self._frame_manager = FrameManager(self._page)
+
+        if self._capture_enabled:
+            self._page.on("pageerror", self._on_page_error)
+            self._page.on("requestfailed", self._on_request_failed)
+
         return self
 
+    def _on_page_error(self, error: Exception) -> None:
+        """Sync handler — must not be async; Playwright runs these in the loop."""
+        try:
+            self._page_errors.append({
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "text": str(error),
+            })
+        except Exception:
+            pass
+
+    def _on_request_failed(self, request: Request) -> None:
+        try:
+            self._failed_requests.append({
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "url": request.url,
+                "method": request.method,
+                "resource_type": request.resource_type,
+                "failure": request.failure,
+            })
+        except Exception:
+            pass
+
+    async def _start_chunk(self, title: str) -> None:
+        """Begin a per-operation trace chunk. No-op if tracing is disabled
+        or a chunk is already active (avoid nesting)."""
+        if not self._capture_enabled or not self._tracing_active or self._chunk_active:
+            return
+        try:
+            await self._context.tracing.start_chunk(title=title)
+            self._chunk_active = True
+        except Exception as e:
+            print(f"[!] start_chunk failed: {e}")
+
+    async def _discard_chunk(self) -> None:
+        """Stop and discard the active chunk (success path)."""
+        if not self._chunk_active:
+            return
+        try:
+            await self._context.tracing.stop_chunk()
+        except Exception:
+            pass
+        self._chunk_active = False
+
+    async def _save_failure_chunk(
+        self,
+        step: str,
+        worklog: TempoWorklog | None = None,
+        exc_text: str | None = None,
+    ) -> None:
+        """Persist the active chunk plus context metadata. Self-protected:
+        a capture failure must never abort the sync."""
+        if not self._chunk_active:
+            return
+        try:
+            if self._capture_count >= self._capture_cap:
+                print(
+                    f"[!] capture cap ({self._capture_cap}) reached, suppressing further captures"
+                )
+                # Discard chunk to free memory
+                try:
+                    await self._context.tracing.stop_chunk()
+                except Exception:
+                    pass
+                self._chunk_active = False
+                return
+
+            ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+            ticket = (worklog.issue_key if worklog else "") or "NA"
+            chunk_dir = self._capture_run_dir / f"{ts}_{step}_{ticket}"
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save the trace chunk
+            trace_path = chunk_dir / "trace.zip"
+            try:
+                await self._context.tracing.stop_chunk(path=str(trace_path))
+            except Exception as e:
+                print(f"[!] stop_chunk(save) failed: {e}")
+                # If stop_chunk failed mid-write, still try to discard
+                try:
+                    await self._context.tracing.stop_chunk()
+                except Exception:
+                    pass
+            self._chunk_active = False
+
+            # Write context.json (best-effort)
+            wl_dict = None
+            if worklog is not None:
+                try:
+                    wl_dict = dataclasses.asdict(worklog)
+                except Exception:
+                    wl_dict = {"repr": repr(worklog)}
+
+            context = {
+                "step": step,
+                "timestamp": ts,
+                "worklog": wl_dict,
+                "exception": exc_text,
+                "page_errors_recent": self._page_errors[-20:],
+                "failed_requests_recent": self._failed_requests[-20:],
+                "page_url": self._page.url if self._page else None,
+            }
+            try:
+                (chunk_dir / "context.json").write_text(
+                    json.dumps(context, indent=2, ensure_ascii=False, default=str)
+                )
+            except Exception as e:
+                print(f"[!] write context.json failed: {e}")
+
+            # Friendly readme for whoever opens the folder later
+            try:
+                (chunk_dir / "README.txt").write_text(
+                    "Failure capture from j2u4 sync.\n\n"
+                    "Open the trace in Playwright Trace Viewer:\n"
+                    f"  uv run playwright show-trace {trace_path.name}\n\n"
+                    "context.json has the worklog, step, exception text, and recent\n"
+                    "page-error / failed-request events.\n\n"
+                    "Privacy: trace + video may contain DOM contents and screen\n"
+                    "snapshots of unrelated worklogs from the same week. Review\n"
+                    "before sharing externally.\n"
+                )
+            except Exception:
+                pass
+
+            self._capture_count += 1
+        except Exception as e:
+            # Self-protect: capture failure must never raise
+            print(f"[!] _save_failure_chunk: unexpected error: {e}")
+            self._chunk_active = False
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        # Stop tracing first (without saving — chunks were saved on failure).
+        if self._tracing_active and self._context:
+            try:
+                await self._context.tracing.stop()
+            except Exception:
+                pass
+            self._tracing_active = False
+
         if self._browser:
             await self._browser.close()
         if self._playwright:
             await self._playwright.stop()
+
+        # Clean up the run dir if we captured nothing — videos and empty
+        # folder are not worth keeping.
+        if (
+            self._capture_enabled
+            and self._capture_count == 0
+            and self._capture_run_dir is not None
+            and self._capture_run_dir.exists()
+        ):
+            try:
+                shutil.rmtree(self._capture_run_dir)
+            except Exception:
+                pass
 
     async def check_session_valid(self) -> bool:
         """Quick check if session is still valid.
@@ -209,6 +400,23 @@ class Unit4Browser:
         return frame
 
     async def set_week(self, week: str) -> bool:
+        """Set the week in Unit4. Wraps the implementation in a trace chunk
+        so that a failure leaves a capture for diagnosis."""
+        if not self._capture_enabled or self._chunk_active:
+            return await self._set_week_impl(week)
+        await self._start_chunk(f"set_week {week}")
+        try:
+            success = await self._set_week_impl(week)
+        except Exception:
+            await self._save_failure_chunk("SET_WEEK", None, exc_text=traceback.format_exc())
+            raise
+        if success:
+            await self._discard_chunk()
+        else:
+            await self._save_failure_chunk("SET_WEEK", None, exc_text=None)
+        return success
+
+    async def _set_week_impl(self, week: str) -> bool:
         """Set the week in Unit4."""
         print(f"[*] Setting week {week}...", end=" ", flush=True)
 
@@ -445,6 +653,23 @@ class Unit4Browser:
         )
 
     async def delete_entries(self, entries: list[Unit4Entry], dry_run: bool = False) -> int:
+        """Delete entries by marking checkboxes and clicking delete button.
+        Wraps the implementation in a trace chunk so that a failure leaves a
+        capture for diagnosis."""
+        if dry_run or not self._capture_enabled or self._chunk_active:
+            return await self._delete_entries_impl(entries, dry_run)
+        await self._start_chunk(f"delete_entries n={len(entries)}")
+        try:
+            count = await self._delete_entries_impl(entries, dry_run)
+        except Exception:
+            await self._save_failure_chunk("DELETE", None, exc_text=traceback.format_exc())
+            raise
+        # We treat any successful return (including 0 = nothing to delete) as
+        # non-failure. delete_entries does not signal failure via return.
+        await self._discard_chunk()
+        return count
+
+    async def _delete_entries_impl(self, entries: list[Unit4Entry], dry_run: bool = False) -> int:
         """Delete entries by marking checkboxes and clicking delete button."""
         if dry_run:
             print(f"    [DRY-RUN] Would delete {len(entries)} entries")
@@ -565,6 +790,23 @@ class Unit4Browser:
         return False
 
     async def create_entry(self, worklog: TempoWorklog, dry_run: bool = False) -> bool:
+        """Add a single entry to Unit4. Wraps the implementation in a trace
+        chunk so that a failure leaves a capture for diagnosis."""
+        if dry_run or not self._capture_enabled or self._chunk_active:
+            return await self._create_entry_impl(worklog, dry_run)
+        await self._start_chunk(f"create_entry {worklog.issue_key} {worklog.date}")
+        try:
+            success = await self._create_entry_impl(worklog, dry_run)
+        except Exception:
+            await self._save_failure_chunk("CREATE", worklog, exc_text=traceback.format_exc())
+            return False
+        if success:
+            await self._discard_chunk()
+        else:
+            await self._save_failure_chunk("CREATE", worklog, exc_text=None)
+        return success
+
+    async def _create_entry_impl(self, worklog: TempoWorklog, dry_run: bool = False) -> bool:
         """Add a single entry to Unit4."""
         description = worklog.description.strip() if worklog.description else worklog.issue_summary
         text = f"[WL:{worklog.worklog_id}] {description[:60]}"
@@ -1065,6 +1307,25 @@ class Unit4Browser:
         return False
 
     async def save(self) -> bool:
+        """Save changes in Unit4. Wraps the implementation in a trace chunk
+        so that a failure leaves a capture for diagnosis. If a chunk is
+        already active (e.g. save() called inside delete_entries), the
+        wrapper is a no-op and the parent chunk records the save."""
+        if not self._capture_enabled or self._chunk_active:
+            return await self._save_impl()
+        await self._start_chunk("save")
+        try:
+            success = await self._save_impl()
+        except Exception:
+            await self._save_failure_chunk("SAVE", None, exc_text=traceback.format_exc())
+            raise
+        if success:
+            await self._discard_chunk()
+        else:
+            await self._save_failure_chunk("SAVE", None, exc_text=None)
+        return success
+
+    async def _save_impl(self) -> bool:
         """Save changes in Unit4."""
         frame = await self.frame_manager.get_content_frame()
 

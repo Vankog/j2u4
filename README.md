@@ -329,6 +329,48 @@ you enter hours and click OK manually:
   ```
   This opens Unit4, scans all UI elements, and saves their HTML attributes to `ui_inspection.json`.
 
+## Failure captures
+
+When something goes wrong during the browser automation (Add button missing, dialog freezes, hours fill fails, save errors out), the script writes a **Playwright trace** for that specific failure. Each capture is a self-contained folder you can ZIP up and send for diagnosis.
+
+### Where captures land
+
+```
+captures/
+└── RUN_2026-04-28T14-23-05/
+    ├── 2026-04-28T14-23-49_CREATE_PROJ-123/
+    │   ├── trace.zip       # Playwright trace — open in Trace Viewer
+    │   ├── context.json    # worklog data, step, exception, recent page errors
+    │   └── README.txt      # short instructions
+    └── *.webm              # browser video for the whole run (if capture_video)
+```
+
+If the run finishes without any failure, the whole `RUN_*` folder is deleted automatically — no clutter from successful runs.
+
+### Opening a trace
+
+```bash
+uv run playwright show-trace captures/RUN_<ts>/<failure-folder>/trace.zip
+```
+
+The Trace Viewer shows every action with before/after DOM snapshots, network and console logs, and a screenshot timeline. This is usually enough to see *exactly* what the browser was doing when the failure happened.
+
+### Privacy warning
+
+Traces and videos contain **DOM content of the entire week** that was visible during the failure — not only the failing worklog. Other tickets, descriptions, customer names may be present. Review captures before sharing externally.
+
+### Disabling captures
+
+Set in `config.json`:
+
+```json
+"debug": {
+  "capture_enabled": false
+}
+```
+
+The whole `debug` block is optional; defaults are `capture_enabled: true`, `capture_dir: "./captures"`, `capture_cap: 10`, `capture_video: true`.
+
 ## Testing
 
 Since Unit4 is a live enterprise system with no sandbox or staging environment, full end-to-end tests are not feasible. The test suite therefore focuses on what **can** be verified offline:

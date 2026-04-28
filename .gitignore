@@ -4,6 +4,9 @@ session.json
 account_to_arbauft_mapping.json
 ui_inspection.json
 
+# Failure captures (Playwright traces, videos, context.json — may contain DOM contents)
+captures/
+
 # Python
 __pycache__/
 *.py[cod]
