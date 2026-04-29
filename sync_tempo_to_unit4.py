@@ -23,11 +23,12 @@ from pathlib import Path
 
 import requests
 
-from clients import JiraClient, TempoClient, ACCOUNT_FIELD, ApiError
+from clients import JiraClient, TempoClient, ApiError
 from models import TempoWorklog, Unit4Entry
 from patterns import Patterns
 from unit4_browser import Unit4Browser
 from utils import (
+    get_week_dates,
     load_config_safe,
     load_mapping,
     save_mapping,
@@ -165,104 +166,148 @@ def check_connectivity(config: dict) -> bool:
 
     if "mapping" in warnings:
         print()
-        print("NOTE: No account mappings found yet.")
-        print("      You have two options:")
-        print("      1. Run sync and enter mappings when prompted")
-        print("      2. Auto-build from Unit4 history:")
-        print("         python build_mapping_from_history.py")
+        print("NOTE: account_to_arbauft_mapping.json is empty or missing.")
+        print("      That is fine — the resolver will pick up workorders")
+        print("      from Tempo account names automatically. For accounts")
+        print("      without an embedded workorder, the sync will prompt")
+        print("      and persist your answer.")
     print("=" * 50)
     print()
 
     return all_ok
 
 
-def process_worklogs(
-    config: dict, raw_worklogs: list[dict], mapping: dict
-) -> tuple[list[TempoWorklog], list[TempoWorklog]]:
-    """Process raw Tempo worklogs, fetch Jira details, apply mapping.
+def fetch_and_resolve_worklogs(
+    config: dict, target_day: str, week_dates: tuple[str, str], mapping: dict
+) -> tuple[list[TempoWorklog], list[TempoWorklog], set[int]]:
+    """Fetch worklogs per Tempo account; resolve ArbAuft via the
+    mapping_resolver pipeline; collect issue summaries best-effort.
+
+    The whole-week worklog ids are returned alongside so the caller can
+    detect orphans (Unit4 markers whose Tempo worklog no longer exists).
 
     Returns:
-        - valid_worklogs: Worklogs with complete mapping
-        - unmapped_worklogs: Worklogs with unknown account
+        - valid_worklogs: target-day worklogs with resolved ArbAuft
+        - unmapped_worklogs: target-day worklogs that could not be resolved
+        - week_worklog_ids: ALL worklog ids found across the whole week
+          (used for orphan detection)
     """
-    valid_worklogs = []
-    unmapped_worklogs = []
-    issue_cache: dict[int, dict] = {}
+    from mapping_resolver import resolve as resolve_arbauft
 
+    tempo = TempoClient(config)
     jira = JiraClient(config)
 
-    print(f"[*] Processing {len(raw_worklogs)} worklogs...")
+    accounts = tempo.fetch_accounts()
+    open_accounts = [a for a in accounts if a.get("status") == "OPEN"]
+    print(f"[*] {len(open_accounts)} open Tempo accounts to scan")
 
-    for wl in raw_worklogs:
+    week_from, week_to = week_dates
+    valid_worklogs: list[TempoWorklog] = []
+    unmapped_worklogs: list[TempoWorklog] = []
+    week_worklog_ids: set[int] = set()
+    issue_summary_cache: dict[int, str] = {}
+    pending_resolution: list[tuple[dict, dict]] = []  # (account, raw_worklog) target-day only
+
+    # Phase 1: collect everything across the whole week, per account
+    for acc in open_accounts:
+        key = acc.get("key")
+        if not key:
+            continue
+        try:
+            wls = tempo.fetch_worklogs_by_account(key, week_from, week_to)
+        except Exception as e:
+            print(f"[!] Tempo: skipping account {key}: {e}")
+            continue
+        for wl in wls:
+            week_worklog_ids.add(wl["tempoWorklogId"])
+            if wl["startDate"] == target_day:
+                pending_resolution.append((acc, wl))
+
+    if not pending_resolution:
+        return [], [], week_worklog_ids
+
+    # Phase 2: resolve target-day entries
+    for acc, wl in pending_resolution:
         worklog_id = wl["tempoWorklogId"]
         issue_id = wl.get("issue", {}).get("id")
         date = wl["startDate"]
         hours = wl["timeSpentSeconds"] / 3600
         description = wl.get("description", "")
 
-        # Fetch issue details if not cached
-        if issue_id and issue_id not in issue_cache:
+        # Issue summary best-effort (Jira lookup; may 404 silently)
+        summary = ""
+        if issue_id and issue_id not in issue_summary_cache:
             issue_data = jira.get_issue_details(issue_id)
             if issue_data:
                 fields = issue_data.get("fields", {})
-                account_field = fields.get(ACCOUNT_FIELD)
+                summary = (fields.get("summary") or "")[:100]
+            issue_summary_cache[issue_id] = summary
+        summary = issue_summary_cache.get(issue_id, "")
+        # Best-effort issue key — use the cached summary lookup if it has it
+        issue_key = ""
+        if issue_id and issue_id in issue_summary_cache:
+            # We didn't cache the key separately; rely on the worklog's
+            # description for context. Could enhance by caching key too.
+            pass
+        if not issue_key:
+            issue_key = wl.get("issue", {}).get("key") or f"ID:{issue_id}"
 
-                if isinstance(account_field, dict):
-                    account_key = str(account_field.get("key") or account_field.get("id") or "")
-                    account_name = account_field.get("name") or account_field.get("value") or ""
-                else:
-                    account_key = ""
-                    account_name = ""
-
-                issue_cache[issue_id] = {
-                    "key": issue_data.get("key", f"ID:{issue_id}"),
-                    "summary": fields.get("summary", "")[:100],
-                    "account_key": account_key,
-                    "account_name": account_name,
-                }
-            else:
-                issue_cache[issue_id] = {
-                    "key": f"ID:{issue_id}",
-                    "summary": "?",
-                    "account_key": "",
-                    "account_name": "",
-                }
-
-        issue_info = issue_cache.get(issue_id, {})
-        account_key = issue_info.get("account_key", "")
-
-        # Apply mapping
-        arbauft = None
-        if account_key and account_key in mapping:
-            arbauft = mapping[account_key]["unit4_arbauft"]
+        result = resolve_arbauft(acc, mapping)
 
         worklog = TempoWorklog(
             worklog_id=worklog_id,
             issue_id=issue_id,
-            issue_key=issue_info.get("key", "?"),
-            issue_summary=issue_info.get("summary", "?"),
+            issue_key=issue_key,
+            issue_summary=summary,
             date=date,
             hours=hours,
             description=description,
-            account_key=account_key,
-            account_name=issue_info.get("account_name", ""),
-            arbauft=arbauft,
+            account_key=str(acc.get("id") or ""),
+            account_name=acc.get("name") or "",
+            arbauft=result.arbauft,
         )
+        # Stash the resolve result for callers that want to handle conflicts
+        worklog._resolve_result = result  # type: ignore[attr-defined]
 
-        if arbauft:
+        if result.arbauft:
             valid_worklogs.append(worklog)
         else:
             unmapped_worklogs.append(worklog)
 
-    return valid_worklogs, unmapped_worklogs
+    return valid_worklogs, unmapped_worklogs, week_worklog_ids
 
 
-def ask_for_arbauft(worklog: TempoWorklog, mapping: dict) -> str | None:
-    """Interactively ask user for ArbAuft for an unmapped worklog."""
+def ask_for_arbauft(
+    worklog: TempoWorklog, mapping: dict, help_urls: list[str] | None = None
+) -> str | None:
+    """Interactively ask user for ArbAuft for an unmapped worklog.
+
+    Surfaces the resolver's diagnostic info (was it conflict, multiple
+    workorders in name, etc.) plus optional Confluence help URLs from
+    config.json so the user has a concrete place to look up the code.
+    """
+    result = getattr(worklog, "_resolve_result", None)
+
     print()
-    print(f"  Unknown Account: {worklog.account_key} ({worklog.account_name})")
-    print(f"    Ticket: {worklog.issue_key}")
-    print(f"    Summary: {worklog.issue_summary[:60]}")
+    print(f"  Unmapped Tempo account: {worklog.account_key} ({worklog.account_name})")
+    print(f"    Ticket : {worklog.issue_key}")
+    if worklog.issue_summary:
+        print(f"    Summary: {worklog.issue_summary[:60]}")
+
+    if result is not None and result.source == "conflict":
+        if len(result.name_matches) > 1:
+            print(f"  [!] CONFLICT: account name contains {len(result.name_matches)} workorder codes:")
+            for m in result.name_matches:
+                print(f"      - {m}")
+        elif result.name_matches and result.conflict_with:
+            print(f"  [!] CONFLICT: name says {result.name_matches[0]}, mapping says {result.conflict_with}")
+        print(f"      Pick one of the codes above, or enter a different one.")
+
+    if help_urls:
+        print(f"  Look up the workorder in:")
+        for url in help_urls:
+            print(f"      - {url}")
+
     print()
     print("  Enter ArbAuft (e.g., 1234-56789-001) or SKIP to skip: ", end="")
 
@@ -288,7 +333,9 @@ def ask_for_arbauft(worklog: TempoWorklog, mapping: dict) -> str | None:
     return arbauft
 
 
-async def sync(week: str, target_day: str, execute: bool):
+async def sync(
+    week: str, target_day: str, execute: bool, config_override: dict | None = None
+):
     """Single-day Tempo→Unit4 sync. ISO week is derived from target_day."""
     dry_run = not execute
     mode_label = "EXECUTE" if execute else "DRY-RUN"
@@ -299,8 +346,9 @@ async def sync(week: str, target_day: str, execute: bool):
     print("=" * 70)
     print()
 
-    # Load config and mapping
-    config = load_config_safe()
+    # Load config (or use the override passed by main(), which carries CLI
+    # overrides for capture flags)
+    config = config_override if config_override is not None else load_config_safe()
     if config is None:
         return
 
@@ -311,16 +359,17 @@ async def sync(week: str, target_day: str, execute: bool):
         return
     print(f"[*] Loaded mapping with {len(mapping)} accounts")
 
-    # Fetch Tempo worklogs for exactly this day
+    # Fetch Tempo worklogs per account (Mo–So of the ISO week, then filter
+    # to target_day). Per-account fetching is permission-friendly: no
+    # Jira-issue read needed for the account resolution.
     print()
-    print(f"[1] Fetching Tempo worklogs for {target_day}...")
+    print(f"[1] Fetching Tempo worklogs (whole week, per Tempo account)...")
 
+    week_from, week_to = get_week_dates(week)
     try:
-        jira = JiraClient(config)
-        tempo = TempoClient(config)
-
-        account_id = jira.get_my_account_id()
-        raw_worklogs = tempo.fetch_worklogs(account_id, target_day, target_day)
+        valid_worklogs, unmapped_worklogs, week_worklog_ids = fetch_and_resolve_worklogs(
+            config, target_day, (week_from, week_to), mapping
+        )
     except ApiError as e:
         print()
         print(f"[!] API Error: {e}")
@@ -328,21 +377,17 @@ async def sync(week: str, target_day: str, execute: bool):
         print("    Run 'python sync_tempo_to_unit4.py --check' to diagnose the issue.")
         return
 
-    print(f"    Found {len(raw_worklogs)} worklogs")
-
-    # Process worklogs
-    print()
-    print("[2] Processing worklogs (Jira lookup + mapping)...")
-    valid_worklogs, unmapped_worklogs = process_worklogs(config, raw_worklogs, mapping)
-    print(f"    Valid: {len(valid_worklogs)}, Unmapped: {len(unmapped_worklogs)}")
+    print(f"    Target day {target_day}: valid={len(valid_worklogs)}, unmapped={len(unmapped_worklogs)}")
+    print(f"    Whole week: {len(week_worklog_ids)} worklog ids (used for orphan detection)")
 
     # Handle unmapped worklogs interactively
     skipped_count = 0
+    help_urls = (config.get("mapping") or {}).get("help_urls") or []
     if unmapped_worklogs:
         print()
         print("[!] Found unmapped worklogs. Enter ArbAuft or SKIP:")
         for wl in unmapped_worklogs:
-            arbauft = ask_for_arbauft(wl, mapping)
+            arbauft = ask_for_arbauft(wl, mapping, help_urls=help_urls)
             if arbauft:
                 wl.arbauft = arbauft
                 valid_worklogs.append(wl)
@@ -409,16 +454,31 @@ async def sync(week: str, target_day: str, execute: bool):
         existing_entries = await unit4.extract_entries(debug=True)
         print(f"    Found {len(existing_entries)} synced entries (whole week)")
 
-        # Only delete entries whose worklog_id belongs to the target day's
-        # Tempo worklogs. Markers from other days stay untouched.
+        # Combine two delete-sets:
+        # 1. Target-day markers: their worklog_id is in today's valid_worklogs
+        #    → delete + recreate (the day-sync core)
+        # 2. Orphans: marker present in Unit4 but no longer in Tempo's whole
+        #    week → delete (no recreate). Catches deleted Tempo worklogs.
         target_wl_ids = {wl.worklog_id for wl in valid_worklogs}
+        orphan_ids = {
+            e.worklog_id for e in existing_entries
+            if e.worklog_id is not None and e.worklog_id not in week_worklog_ids
+        }
+        if orphan_ids:
+            print(f"    [orphan-cleanup] {len(orphan_ids)} markers in Unit4 with no matching Tempo worklog — will be deleted:")
+            for entry in existing_entries:
+                if entry.worklog_id in orphan_ids:
+                    print(f"      - [WL:{entry.worklog_id}] {entry.ticketno}")
+
         before = len(existing_entries)
         existing_entries = [
-            e for e in existing_entries if e.worklog_id in target_wl_ids
+            e for e in existing_entries
+            if e.worklog_id in target_wl_ids or e.worklog_id in orphan_ids
         ]
         print(
-            f"    Filtered to target day {target_day}: "
-            f"{len(existing_entries)}/{before} match"
+            f"    To delete: {len(existing_entries)}/{before} "
+            f"(target-day={len(target_wl_ids & {e.worklog_id for e in existing_entries})}, "
+            f"orphans={len(orphan_ids)})"
         )
 
         print()
@@ -454,20 +514,20 @@ async def sync(week: str, target_day: str, execute: bool):
                 await unit4.delete_entries(existing_entries)
 
                 # Re-scan and repeat if needed
+                ids_to_kill = target_wl_ids | orphan_ids
                 remaining: list[Unit4Entry] = []
                 for delete_pass in range(3):
                     print()
                     print(f"    Re-scanning (pass {delete_pass + 1})...")
                     await asyncio.sleep(2)
                     remaining_all = await unit4.extract_entries()
-                    # The rescan returns the whole week — filter to our target
-                    # day's worklog ids before deciding whether more deletes
-                    # are needed.
-                    remaining = [r for r in remaining_all if r.worklog_id in target_wl_ids]
+                    # The rescan returns the whole week — keep only the
+                    # markers we wanted to delete (target-day + orphans).
+                    remaining = [r for r in remaining_all if r.worklog_id in ids_to_kill]
                     if not remaining:
-                        print("    All target-day [WL:] entries deleted")
+                        print("    All targeted [WL:] entries deleted")
                         break
-                    print(f"    {len(remaining)} target-day [WL:] entries still exist, deleting again...")
+                    print(f"    {len(remaining)} targeted [WL:] entries still exist, deleting again...")
                     await unit4.delete_entries(remaining)
 
                 # Log what actually disappeared
@@ -545,15 +605,9 @@ async def sync(week: str, target_day: str, execute: bool):
             print("[!] WARNING: Some worklogs were SKIPPED (not synced to Unit4)!")
             print()
             print("    These worklogs have Tempo accounts without a Unit4 ArbAuft mapping.")
-            print("    To sync them, you need to add the mapping. Options:")
-            print()
-            print("    1. Run sync again and enter the ArbAuft when prompted")
-            print("       (instead of typing SKIP, enter the ArbAuft code)")
-            print()
-            print("    2. Auto-build mappings from your Unit4 history:")
-            print("       python build_mapping_from_history.py")
-            print()
-            print("    3. Manually edit account_to_arbauft_mapping.json")
+            print("    To sync them: re-run the same command and enter the ArbAuft when")
+            print("    prompted (instead of typing SKIP). Your answer is persisted in")
+            print("    account_to_arbauft_mapping.json for future runs.")
 
         print()
         print("[*] Press ENTER to close browser...")
@@ -609,6 +663,22 @@ Examples:
     parser.add_argument(
         "--check", action="store_true", help="Check connectivity to all services and exit"
     )
+    parser.add_argument(
+        "--capture",
+        dest="capture",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="Enable / disable failure-capture (Playwright trace). "
+        "Default: from config.json (debug.capture_enabled), or on if unset.",
+    )
+    parser.add_argument(
+        "--video",
+        dest="video",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="Enable / disable browser video recording when capture is on. "
+        "Default: from config.json (debug.capture_video), or on if unset.",
+    )
 
     args = parser.parse_args()
 
@@ -616,6 +686,16 @@ Examples:
     config = load_config_safe()
     if config is None:
         return 1
+
+    # Apply CLI overrides for capture / video into the config dict the
+    # browser will read. CLI wins over config; config wins over default.
+    if args.capture is not None or args.video is not None:
+        debug_cfg = dict(config.get("debug") or {})
+        if args.capture is not None:
+            debug_cfg["capture_enabled"] = args.capture
+        if args.video is not None:
+            debug_cfg["capture_video"] = args.video
+        config["debug"] = debug_cfg
 
     # Handle --check mode
     if args.check:
@@ -637,7 +717,7 @@ Examples:
         print(f"Error: cannot parse date '{target_day}': {e}")
         return 1
 
-    asyncio.run(sync(week, target_day, args.execute))
+    asyncio.run(sync(week, target_day, args.execute, config_override=config))
     return 0
 
 
