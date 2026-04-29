@@ -872,42 +872,66 @@ class Unit4Browser:
             return False
         await asyncio.sleep(1.5)
 
-        # Fill form fields (ID-based with label fallback + retry)
+        # Fill form fields. The dialog overlays the grid, so we MUST target
+        # the dialog-scoped inputs (ground-truth IDs from debug_dialog_inputs.py):
+        #   ArbAuft   : 1678_Editor (NOT 1574_Editor — that's the grid)
+        #   Aktivität : 1680_Editor (NOT 1576_Editor — that's the grid)
+        #   Ticketno  : 1688_Editor (NOT dim3_i — that's the grid)
+        #   Text      : description_i with :not([disabled]) (multiple in DOM)
+        # Targeting the grid IDs makes click() time out 10s per field while
+        # the dialog overlays the grid input.
         print("filling ArbAuft...", end=" ", flush=True)
-        arbauft_ok = await self._fill_field_by_id(frame, "input[id*='1574_Editor']", worklog.arbauft)
-        if not arbauft_ok:
-            arbauft_ok = await self._fill_field(frame, "ArbAuft", worklog.arbauft)
+        arbauft_ok = await self._fill_field_by_id(
+            frame, "input[id*='1678_Editor']:not([disabled])", worklog.arbauft
+        )
         print("OK" if arbauft_ok else "FAIL", end=" | ", flush=True)
-        await asyncio.sleep(2)
 
+        # Wait for Aktivität to be enabled (ArbAuft postback)
+        await self._wait_for_enabled(frame, "input[id*='1680_Editor']", timeout_s=4.0)
+
+        # Aktivität is an ARIA combobox. fill("TEMPO") snaps to NOTEMPO
+        # because Unit4 selects the first alphabetical match. Workaround:
+        # type per-character so the combobox filters correctly per keystroke.
         print("Aktivität...", end=" ", flush=True)
-        aktivitaet_ok = await self._fill_field_by_id(frame, "input[id*='1576_Editor']", "TEMPO")
-        if not aktivitaet_ok:
-            aktivitaet_ok = await self._fill_field(frame, "Aktivität", "TEMPO")
+        aktivitaet_ok = False
+        try:
+            akt = frame.locator("input[id*='1680_Editor']:not([disabled])").first
+            if await akt.count() > 0:
+                await akt.click(timeout=TIMEOUT)
+                await akt.press("Control+a")
+                await self.page.keyboard.type("TEMPO", delay=20)
+                await self.page.keyboard.press("Tab")
+                aktivitaet_ok = True
+        except Exception:
+            aktivitaet_ok = False
         print("OK" if aktivitaet_ok else "FAIL", end=" | ", flush=True)
 
         print("Text...", end=" ", flush=True)
-        text_ok = await self._fill_field_by_id(frame, "input[id*='description_i']", text)
-        if not text_ok:
-            text_ok = await self._fill_field(frame, "Text", text)
+        text_ok = await self._fill_field_by_id(
+            frame, "input[id*='description_i']:not([disabled])", text
+        )
         print("OK" if text_ok else "FAIL", end=" | ", flush=True)
 
         print("Ticketno...", end=" ", flush=True)
-        ticketno_ok = await self._fill_field_by_id(frame, "input[id*='dim3_i']", worklog.issue_key)
-        if not ticketno_ok:
-            ticketno_ok = await self._fill_field(frame, "Ticketno", worklog.issue_key)
+        ticketno_ok = await self._fill_field_by_id(
+            frame, "input[id*='1688_Editor']:not([disabled])", worklog.issue_key
+        )
         print("OK" if ticketno_ok else "FAIL")
 
-        # Retry failed fields once
+        # Retry failed Text/Ticketno once (postback timing)
         if not (text_ok and ticketno_ok):
             await asyncio.sleep(1)
             if not text_ok:
                 print("    retry Text...", end=" ", flush=True)
-                text_ok = await self._fill_field_by_id(frame, "input[id*='description_i']", text)
+                text_ok = await self._fill_field_by_id(
+                    frame, "input[id*='description_i']:not([disabled])", text
+                )
                 print("OK" if text_ok else "FAIL")
             if not ticketno_ok:
                 print("    retry Ticketno...", end=" ", flush=True)
-                ticketno_ok = await self._fill_field_by_id(frame, "input[id*='dim3_i']", worklog.issue_key)
+                ticketno_ok = await self._fill_field_by_id(
+                    frame, "input[id*='1688_Editor']:not([disabled])", worklog.issue_key
+                )
                 print("OK" if ticketno_ok else "FAIL")
 
         # Fill hours in Zeitdetails
@@ -920,8 +944,13 @@ class Unit4Browser:
         if any_fail:
             print(f"    [!] UNVOLLSTÄNDIG: {worklog.arbauft} | {text} | {worklog.issue_key} | {day_name}: {hours_str}h")
 
-        # Click OK to close dialog (ID-based, then text fallback)
-        ok_clicked = await self._click_by_id(frame, "button[id$='s108_apply']")
+        # Click OK to close dialog. Filter to enabled button — Unit4 has
+        # multiple s108_apply elements in the DOM (different dialog layers),
+        # only the active dialog's button is enabled. Without the filter,
+        # nth=0 hits a hidden/disabled button and click() times out 10s.
+        ok_clicked = await self._click_by_id(
+            frame, "button[id$='s108_apply']:not([disabled])"
+        )
         if not ok_clicked:
             ok_clicked = await self._click_button(frame, "OK")
         if not ok_clicked:
