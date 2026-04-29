@@ -86,22 +86,62 @@ continues with an empty summary).
 ```
 
 This will:
-- Install Python and all dependencies (via `uv`)
-- Install Chromium for browser automation
-- Create `config.json` from template
+- Verify `uv` is installed
+- Install Python + dependencies into a local `.venv` (`uv sync`)
+- Install Chromium for Playwright (`uv run playwright install chromium`)
+- Create `config.json` from `config.example.json` (if missing)
+- Create empty `account_to_arbauft_mapping.json` (if missing)
+- **Install `j2u4` as a global command** via `uv tool install --from . j2u4`
+  — afterwards `j2u4 …` works from any directory
+
+> **Note:** `uv tool install` puts the executable in `~/.local/bin`. If
+> that directory is not in your `$PATH`, `uv` prints a one-line hint
+> (typically `uv tool update-shell` or add the directory manually).
 
 ### Manual Setup
 
-1. **Install dependencies**
-   ```bash
-   uv sync
-   uv run playwright install chromium
-   ```
+```bash
+# 1. Dependencies (local .venv)
+uv sync
+uv run playwright install chromium
 
-2. **Create config file**
-   ```bash
-   cp config.example.json config.json
-   ```
+# 2. Config file
+cp config.example.json config.json
+echo "{}" > account_to_arbauft_mapping.json
+
+# 3. Install global `j2u4` command
+uv tool install --from . j2u4
+```
+
+### Updating
+
+After pulling new commits from the repo:
+
+```bash
+cd j2u4
+git pull
+./setup.sh         # idempotent — runs uv tool install --reinstall internally
+```
+
+Or, if you only want to refresh the binary without re-running every step:
+
+```bash
+uv tool install --from . j2u4 --reinstall
+```
+
+### Local venv vs. global tool
+
+There are **two** Python environments after setup:
+
+- The **local `.venv`** (created by `uv sync`) is for development — running
+  the test suite (`uv run pytest`) or the diagnostic tools
+  (`uv run python tools/inspect_ui.py`).
+- The **global `j2u4` command** lives in its own isolated uv-tool venv
+  (`~/.local/share/uv/tools/j2u4/`). It works from any working directory
+  and is independent of the local `.venv`.
+
+The two do not interfere. Updating the repo + running `./setup.sh` keeps
+both in sync.
 
 ### API Tokens
 
