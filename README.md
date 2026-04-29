@@ -90,7 +90,7 @@ This will:
 - Install Python + dependencies into a local `.venv` (`uv sync`)
 - Install Chromium for Playwright (`uv run playwright install chromium`)
 - Create `config.json` from `config.example.json` (if missing)
-- Create empty `account_to_arbauft_mapping.json` (if missing)
+- Create empty `mapping.json` (if missing)
 - **Install `j2u4` as a global command** via `uv tool install --from . j2u4`
   — afterwards `j2u4 …` works from any directory
 
@@ -107,7 +107,7 @@ uv run playwright install chromium
 
 # 2. Config file
 cp config.example.json config.json
-echo "{}" > account_to_arbauft_mapping.json
+echo "{}" > mapping.json
 
 # 3. Install global `j2u4` command
 uv tool install --from . j2u4
@@ -246,7 +246,7 @@ in order:
    pattern `1018-NNNNN-NNN`, that is the canonical source. Recommended
    pattern: pin the workorder directly in Tempo so no mapping file is
    needed.
-2. **Local `account_to_arbauft_mapping.json`** — fallback for accounts
+2. **Local `mapping.json`** — fallback for accounts
    without an embedded workorder. The file is gitignored and grows
    automatically as you answer prompts.
 3. **Interactive prompt** — when neither regex nor file resolved. The
@@ -308,7 +308,7 @@ j2u4/
 ├── README.md
 ├── config.example.json           — template
 ├── config.json                   — credentials (gitignored)
-├── account_to_arbauft_mapping.json — mapping (gitignored)
+├── mapping.json — mapping (gitignored)
 ├── session.json                  — browser session (gitignored)
 ├── sync_history.log              — append-only per-run log (gitignored)
 ├── src/j2u4/
@@ -347,7 +347,7 @@ The resolver picks this up automatically — **no mapping file needed** for
 that account. This is the lowest-maintenance source: there is no separate
 file to keep in sync, and the workorder is visible to anyone in Tempo.
 
-### 2. Local `account_to_arbauft_mapping.json`
+### 2. Local `mapping.json`
 
 For accounts whose name does not include a workorder, the resolver falls
 back to a local JSON file (gitignored) keyed by Tempo account id:
@@ -382,7 +382,7 @@ If neither name nor file resolves the account, the sync prompts:
 
 The "Look up the workorder in:" URLs come from
 `config.mapping.help_urls` (optional). Type the workorder you find — it's
-persisted into `account_to_arbauft_mapping.json` for future runs.
+persisted into `mapping.json` for future runs.
 
 ### Conflicts
 

@@ -1,6 +1,7 @@
 # Secrets and session data
 config.json
 session.json
+mapping.json
 account_to_arbauft_mapping.json
 ui_inspection.json
 

@@ -11,7 +11,8 @@ T = TypeVar("T")
 # File paths
 SESSION_FILE = "session.json"
 CONFIG_FILE = "config.json"
-MAPPING_FILE = "account_to_arbauft_mapping.json"
+MAPPING_FILE = "mapping.json"
+LEGACY_MAPPING_FILE = "account_to_arbauft_mapping.json"
 
 
 def load_config() -> dict:
@@ -89,7 +90,23 @@ def load_config_safe() -> dict | None:
 
 
 def load_mapping() -> dict:
-    """Load account-to-arbauft mapping."""
+    """Load account-to-arbauft mapping.
+
+    One-shot migration: if the legacy filename exists but the new one
+    does not, rename it. After the next save_mapping(), only the new
+    name persists.
+    """
+    if not os.path.exists(MAPPING_FILE) and os.path.exists(LEGACY_MAPPING_FILE):
+        try:
+            os.rename(LEGACY_MAPPING_FILE, MAPPING_FILE)
+            print(f"[*] Renamed legacy {LEGACY_MAPPING_FILE} -> {MAPPING_FILE}")
+        except OSError as e:
+            # If rename fails (permissions, cross-device, etc.), fall through
+            # and read from the legacy path so the run can still proceed.
+            print(f"[!] Could not rename legacy mapping file: {e}")
+            with open(LEGACY_MAPPING_FILE) as f:
+                return json.load(f)
+
     if os.path.exists(MAPPING_FILE):
         with open(MAPPING_FILE) as f:
             return json.load(f)

@@ -1,18 +1,12 @@
-"""
-Sync Tempo worklogs to Unit4.
+"""Sync Tempo worklogs to Unit4 (one day per invocation).
 
-Usage:
-    # Check connectivity first
-    python sync_tempo_to_unit4.py --check
+Usage (after `uv tool install --from . j2u4`):
 
-    # Dry-run (default) - shows what would happen
-    python sync_tempo_to_unit4.py 202605
-
-    # Execute - actually creates entries
-    python sync_tempo_to_unit4.py 202605 --execute
-
-    # With cutover date (only sync from this date onwards)
-    python sync_tempo_to_unit4.py 202605 --cutover 2026-01-29 --execute
+    j2u4 --check                                # connectivity test
+    j2u4                                        # dry-run for today
+    j2u4 --day 2026-04-29                       # dry-run for that day
+    j2u4 --day 2026-04-29 --execute             # sync that day
+    j2u4 --day 2026-04-29 --execute --no-video  # skip browser video
 """
 
 import argparse
@@ -166,7 +160,7 @@ def check_connectivity(config: dict) -> bool:
 
     if "mapping" in warnings:
         print()
-        print("NOTE: account_to_arbauft_mapping.json is empty or missing.")
+        print("NOTE: mapping.json is empty or missing.")
         print("      That is fine — the resolver will pick up workorders")
         print("      from Tempo account names automatically. For accounts")
         print("      without an embedded workorder, the sync will prompt")
@@ -607,7 +601,7 @@ async def sync(
             print("    These worklogs have Tempo accounts without a Unit4 ArbAuft mapping.")
             print("    To sync them: re-run the same command and enter the ArbAuft when")
             print("    prompted (instead of typing SKIP). Your answer is persisted in")
-            print("    account_to_arbauft_mapping.json for future runs.")
+            print("    mapping.json for future runs.")
 
         print()
         print("[*] Press ENTER to close browser...")

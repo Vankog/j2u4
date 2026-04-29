@@ -53,14 +53,20 @@ else
     CONFIG_CREATED=false
 fi
 
+# Migrate legacy mapping filename if needed
+if [ ! -f "mapping.json" ] && [ -f "account_to_arbauft_mapping.json" ]; then
+    echo "[4] Renaming legacy account_to_arbauft_mapping.json -> mapping.json"
+    mv account_to_arbauft_mapping.json mapping.json
+fi
+
 # Create empty mapping file if needed
-if [ ! -f "account_to_arbauft_mapping.json" ]; then
+if [ ! -f "mapping.json" ]; then
     echo "[4] Creating empty mapping file..."
-    echo "{}" > account_to_arbauft_mapping.json
+    echo "{}" > mapping.json
     MAPPING_CREATED=true
 else
     # Count mappings
-    MAPPING_COUNT=$(grep -c "unit4_arbauft" account_to_arbauft_mapping.json 2>/dev/null || echo "0")
+    MAPPING_COUNT=$(grep -c "unit4_arbauft" mapping.json 2>/dev/null || echo "0")
     echo "[4] Mapping file exists ($MAPPING_COUNT mappings)"
     MAPPING_CREATED=false
 fi
