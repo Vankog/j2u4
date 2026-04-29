@@ -27,8 +27,8 @@ By using this software, you acknowledge that you are solely responsible for any 
 
 ### Windows Users
 
-The shell scripts (`setup.sh`, `sync`, `build-mapping`) require a Unix shell.
-On Windows, use **WSL** (Windows Subsystem for Linux):
+The setup script (`setup.sh`) requires a Unix shell. On Windows, use
+**WSL** (Windows Subsystem for Linux):
 
 ```powershell
 # 1. Install WSL (run as Administrator)
@@ -43,7 +43,7 @@ wsl --install
 # 0. Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 1. Clone and setup
+# 1. Clone and setup — this also installs `j2u4` as a global command
 git clone <repo-url>
 cd j2u4
 ./setup.sh
@@ -51,27 +51,31 @@ cd j2u4
 # 2. Edit config.json with your API tokens
 
 # 3. Test connectivity
-./sync --check
+j2u4 --check
 
-# 4. Sync a day (dry-run first, then execute)
-./sync --day 2026-04-29
-./sync --day 2026-04-29 --execute
+# 4. Sync today (dry-run first, then execute)
+j2u4 --day $(date -I)
+j2u4 --day $(date -I) --execute
 ```
 
 ## How it works
 
 ```
-Tempo API ──→ Worklogs (date, hours, issue_id)
-    │
-    ▼
-Jira API ──→ Issue Details (key, summary, Account field)
-    │
-    ▼
-Mapping ──→ Tempo Account → Unit4 ArbAuft
+Tempo API ──→ Tempo Account (per-account /worklogs endpoint)
+    │            │
+    │            ▼
+    │       Mapping resolver: regex(account.name) → mapping.json → prompt
+    │            │
+    ▼            ▼
+Worklogs ──→ Unit4 ArbAuft
     │
     ▼
 Playwright ──→ Unit4 Zeiterfassung (browser automation)
 ```
+
+The Jira API is only used to look up issue summaries (best-effort, can
+404 silently for tickets you do not have permission to read — the sync
+continues with an empty summary).
 
 ## Setup
 
@@ -133,7 +137,7 @@ On first run, Unit4 will prompt for login (2FA). The session is saved to `sessio
 ### Check connectivity first
 
 ```bash
-./sync --check
+j2u4 --check
 ```
 
 This tests Jira, Tempo, and Unit4 connectivity before syncing.
@@ -142,21 +146,32 @@ This tests Jira, Tempo, and Unit4 connectivity before syncing.
 
 ```bash
 # Dry-run — shows what would happen for a specific day
-./sync --day 2026-04-29
+j2u4 --day 2026-04-29
 
 # Execute — syncs this single day, fully unattended
-./sync --day 2026-04-29 --execute
+j2u4 --day 2026-04-29 --execute
 
 # No --day = today
-./sync                       # dry-run for today
-./sync --execute             # ← error: --day required for --execute
+j2u4                         # dry-run for today
+j2u4 --execute               # dry-run too: --day still required to act
+```
+
+### Capture and video flags
+
+Failure-capture and browser-video defaults come from `config.json`
+(`debug.capture_enabled` / `debug.capture_video`, both default to `true`).
+Override per-invocation with CLI flags:
+
+```bash
+j2u4 --day 2026-04-29 --execute --no-capture          # skip trace+video
+j2u4 --day 2026-04-29 --execute --capture --no-video  # trace yes, video no
 ```
 
 The script syncs **exactly one day per invocation**. The ISO week is derived
 from the date — Sat and Mon of the same calendar week land in the same ISO
 week, no need to compute it yourself.
 
-Each invocation is atomic: the script reads the entire week's `[WL:]`
+Each invocation is atomic: the sync reads the entire week's `[WL:]`
 markers, but only deletes-and-recreates the ones whose Tempo worklog id
 belongs to the target day. Other days' markers stay untouched. If the run
 hangs or fails, only one day is affected; other days can be re-run in
@@ -169,25 +184,54 @@ so you can see which markers were deleted and created — see
 ### What the script does
 
 1. Derives the ISO week from `--day` (e.g. `2026-04-29` → `202618`)
-2. Fetches Tempo worklogs for that single day
-3. Looks up Jira issues to get the Account field
-4. Maps Account → Unit4 ArbAuft code
-5. Opens Unit4 (browser is visible — you can watch)
-6. Reads existing `[WL:]` markers in the current week
-7. Filters them to the target day's worklog ids
-8. **Deletes** these markers
-9. **Creates** fresh entries from Tempo
-10. **Saves**, then writes the result to `sync_history.log`
+2. Fetches Tempo worklogs **per Tempo account** (no Jira-Issue lookup
+   for account resolution → permission-friendly)
+3. Resolves each account's ArbAuft via the resolver pipeline (regex on
+   the account name → mapping.json → interactive prompt)
+4. Opens Unit4 (browser is visible — you can watch)
+5. Reads existing `[WL:]` markers in the current week
+6. Identifies two delete-sets:
+   - **Target-day markers** (their worklog id matches today's Tempo worklogs)
+   - **Orphans** (their worklog id no longer exists in this week's Tempo)
+7. **Deletes** both sets
+8. **Creates** fresh entries from Tempo's target-day worklogs
+9. **Saves**, then writes the result to `sync_history.log`
+
+### Mapping resolver (3 stages)
+
+For each Tempo account that appears in your worklogs, the resolver tries
+in order:
+
+1. **Regex on the Tempo account name** — if the name contains a workorder
+   pattern `1018-NNNNN-NNN`, that is the canonical source. Recommended
+   pattern: pin the workorder directly in Tempo so no mapping file is
+   needed.
+2. **Local `account_to_arbauft_mapping.json`** — fallback for accounts
+   without an embedded workorder. The file is gitignored and grows
+   automatically as you answer prompts.
+3. **Interactive prompt** — when neither regex nor file resolved. The
+   prompt shows context plus optional "look up here" links from
+   `config.json` (`mapping.help_urls`, e.g. your team's Confluence pages
+   listing the workorders).
+
+If the regex on the name AND the file disagree (e.g. someone changed the
+Tempo account name), the resolver flags the conflict and asks the user
+to pick. No silent overrides — drift becomes visible.
+
+### Orphan cleanup (automatic)
+
+Each sync compares Unit4's `[WL:]` markers with the worklog ids Tempo
+returns for the whole week. Markers whose worklog no longer exists in
+Tempo are removed automatically. This catches the "I deleted a worklog
+in Tempo, the marker was stuck in Unit4" case.
 
 ### Known limitation: date drift
 
-Deletion is keyed by Tempo worklog id, not by row date in Unit4. If a Tempo
-worklog moved from day A to day B but its `[WL:N]` marker still sits on day
-A in Unit4, the day-A sync will *not* delete it (id N is no longer among
-day A's worklogs). The day-B sync will pick it up wherever it is in the
-visible week and recreate it correctly. Truly orphan markers (Tempo worklog
-deleted) need manual cleanup in Unit4 — there is no bulk-cleanup mode in
-this script.
+Deletion is keyed by Tempo worklog id, not by row date in Unit4. If a
+Tempo worklog moved from day A to day B but its `[WL:N]` marker still
+sits on day A in Unit4, the day-A sync will *not* delete it (id N is no
+longer in day A's worklogs). The day-B sync will pick it up wherever it
+is in the visible week and recreate it correctly.
 
 ### Tracking log
 
@@ -215,71 +259,58 @@ Entries are marked with `[WL:xxx]` at the beginning of the text field:
 ```
 This allows tracking which Unit4 entries were synced from which Tempo worklog.
 
-## Files
-
-| File | Purpose |
-|------|---------|
-| `setup.sh` | One-time setup (creates venv, installs dependencies) |
-| `sync` | Wrapper script for syncing (use this!) |
-| `build-mapping` | Wrapper script for building mappings |
-| `sync_tempo_to_unit4.py` | Main sync entry point (CLI) |
-| `unit4_browser.py` | Playwright-based Unit4 browser automation |
-| `build_mapping_from_history.py` | Build account→arbauft mapping from Unit4 history |
-| `clients.py` | Jira and Tempo API clients |
-| `models.py` | Dataclasses (TempoWorklog, Unit4Entry, SyncConfig, …) |
-| `patterns.py` | Centralized regex patterns |
-| `utils.py` | Shared helpers (config loading, dates, …) |
-| `inspect_ui.py` | UI inspector — dumps Unit4 element attributes to `ui_inspection.json` |
-| `debug_dialog_inputs.py` | One-shot dialog inspector — dumps input IDs from the Add+Zoom dialog |
-| `test_patterns.py` | Offline pytest suite (regex + locale config) |
-| `test_capture_failure.py` | Offline tests for the failure-capture helper |
-| `test_per_day_sync.py` | Offline tests for per-day filter + tracking log |
-| `test_jira_connection.py` | Manual Jira/Tempo connectivity test script |
-| `config.json` | Credentials (gitignored!) |
-| `config.example.json` | Template for config.json |
-| `account_to_arbauft_mapping.json` | Account to ArbAuft mapping (gitignored!) |
-| `session.json` | Browser session (gitignored!) |
-| `sync_history.log` | Append-only per-run log (gitignored!) |
-
-## Account Mappings
-
-The script needs to know which Tempo Account maps to which Unit4 ArbAuft code.
-This mapping is stored in `account_to_arbauft_mapping.json`.
-
-### Option 1: Auto-build from Unit4 history (recommended)
-
-If you already have time entries in Unit4, the script can learn the mappings:
-
-```bash
-# Scan last 8 weeks (default)
-./build-mapping
-
-# Scan last 12 weeks
-./build-mapping --weeks 12
-
-# Scan specific range
-./build-mapping --from 202601 --to 202610
-```
-
-This opens Unit4, scans the specified weeks, and builds the mapping automatically.
-
-### Option 2: Enter mappings during sync
-
-When the script encounters an unknown Tempo account, it will prompt you:
+## Layout
 
 ```
-Unknown Account: 42 (ACME - Development)
-  Ticket: ACME-1234
-  Summary: Fix deployment pipeline
-
-Enter ArbAuft (e.g., 1234-56789-001) or SKIP to skip:
+j2u4/
+├── pyproject.toml                — package metadata, j2u4 CLI entry point
+├── setup.sh                      — one-time setup (deps + uv tool install)
+├── README.md
+├── config.example.json           — template
+├── config.json                   — credentials (gitignored)
+├── account_to_arbauft_mapping.json — mapping (gitignored)
+├── session.json                  — browser session (gitignored)
+├── sync_history.log              — append-only per-run log (gitignored)
+├── src/j2u4/
+│   ├── cli.py                    — argparse + sync orchestration (j2u4 cmd)
+│   ├── browser.py                — Playwright Unit4 automation
+│   ├── clients.py                — Jira and Tempo API clients
+│   ├── mapping_resolver.py       — regex → file → unresolved pipeline
+│   ├── models.py                 — TempoWorklog, Unit4Entry dataclasses
+│   ├── patterns.py               — centralized regex patterns
+│   └── utils.py                  — config / mapping / date helpers
+├── tests/
+│   ├── test_patterns.py          — regex + locale config (51 tests)
+│   ├── test_capture_failure.py   — failure-capture helper (4 tests)
+│   ├── test_per_day_sync.py      — filter + tracking log (7 tests)
+│   ├── test_mapping_resolver.py  — resolver pipeline (7 tests)
+│   └── test_jira_connection.py   — manual Jira/Tempo smoke (live)
+└── tools/
+    ├── inspect_ui.py             — dump Unit4 element attributes
+    └── debug_dialog_inputs.py    — dump dialog input IDs
 ```
 
-Enter the ArbAuft code and it will be saved for future use.
+## Account mappings
 
-### Option 3: Manual editing
+There are three ways the resolver can find the workorder for a Tempo
+account, in order of preference:
 
-Edit `account_to_arbauft_mapping.json` directly:
+### 1. Workorder in the Tempo account name (recommended)
+
+Pin the workorder directly in the Tempo account name, e.g.:
+
+```
+ACME - Operations - Cloud (1018-12345-001)
+```
+
+The resolver picks this up automatically — **no mapping file needed** for
+that account. This is the lowest-maintenance source: there is no separate
+file to keep in sync, and the workorder is visible to anyone in Tempo.
+
+### 2. Local `account_to_arbauft_mapping.json`
+
+For accounts whose name does not include a workorder, the resolver falls
+back to a local JSON file (gitignored) keyed by Tempo account id:
 
 ```json
 {
@@ -291,23 +322,52 @@ Edit `account_to_arbauft_mapping.json` directly:
 }
 ```
 
+The file grows automatically as you answer prompts during sync. Manual
+editing is fine.
+
+### 3. Interactive prompt with help links
+
+If neither name nor file resolves the account, the sync prompts:
+
+```
+  Unmapped Tempo account: 42 (ACME - Development)
+    Ticket : ACME-1234
+    Summary: Fix deployment pipeline
+  Look up the workorder in:
+      - https://your-domain.atlassian.net/wiki/spaces/.../Customer+Projects
+      - https://your-domain.atlassian.net/wiki/spaces/.../Internal+Projects
+
+  Enter ArbAuft (e.g., 1234-56789-001) or SKIP to skip:
+```
+
+The "Look up the workorder in:" URLs come from
+`config.mapping.help_urls` (optional). Type the workorder you find — it's
+persisted into `account_to_arbauft_mapping.json` for future runs.
+
+### Conflicts
+
+If the Tempo account name says one workorder and `mapping.json` says
+another, the resolver shows both and asks you to pick. There is no
+silent override — drift between the two sources is always made visible.
+
 ### Finding the right ArbAuft code
 
-The ArbAuft code (e.g., `1234-56789-001`) is visible in Unit4 when you create a time entry.
-It's the "ArbAuft" field in the entry form.
+The ArbAuft code (e.g., `1234-56789-001`) is visible in Unit4 when you
+create a time entry, in the "ArbAuft" field. Your team typically also
+keeps a list (Confluence, internal wiki, …) — point `config.mapping.help_urls`
+at it so the prompt links there.
 
 ## Command Reference
 
 | Command | Description |
 |---------|-------------|
-| `./setup.sh` | Initial setup (run once after cloning) |
-| `./sync --check` | Test connectivity to Jira, Tempo, Unit4 |
-| `./sync --day YYYY-MM-DD --execute` | Sync this single day |
-| `./sync --day YYYY-MM-DD` | Dry-run for that day |
-| `./sync` | Dry-run for today |
-| `./build-mapping` | Build mappings from last 8 weeks |
-| `./build-mapping --weeks N` | Build mappings from last N weeks |
-| `./build-mapping --from YYYYWW --to YYYYWW` | Build mappings from specific range |
+| `./setup.sh` | Initial setup (deps + Chromium + `j2u4` install via `uv tool`) |
+| `j2u4 --check` | Test connectivity to Jira, Tempo, Unit4 |
+| `j2u4 --day YYYY-MM-DD --execute` | Sync this single day |
+| `j2u4 --day YYYY-MM-DD` | Dry-run for that day |
+| `j2u4` | Dry-run for today |
+| `j2u4 ... --no-capture` | Disable failure-capture for this run (override config) |
+| `j2u4 ... --no-video` | Disable video recording for this run (override config) |
 
 ## Troubleshooting
 
@@ -316,7 +376,7 @@ It's the "ArbAuft" field in the entry form.
 - Copy manually: `cp config.example.json config.json`
 
 ### "Authentication failed" / API errors
-- Run `./sync --check` to diagnose connectivity issues
+- Run `j2u4 --check` to diagnose connectivity issues
 - Verify your API tokens are correct in `config.json`
 - Jira token: Check it's not expired at [Atlassian Account](https://id.atlassian.com/manage-profile/security/api-tokens)
 - Tempo token: Regenerate in Tempo Settings > API Integration
@@ -345,7 +405,7 @@ day fails:
 2. Check `sync_history.log` — the most recent block records `SAVE fail`
    with a back-reference to the capture folder.
 3. Open the trace: `uv run playwright show-trace captures/RUN_*/.../trace.zip`
-4. Fix the underlying cause and re-run `./sync --day YYYY-MM-DD --execute`.
+4. Fix the underlying cause and re-run `j2u4 --day YYYY-MM-DD --execute`.
 
 The re-run will detect the partial state (some `[WL:]` markers from the
 failed run, some missing) and bring the day to consistency by deleting
@@ -356,7 +416,7 @@ and recreating the target day's markers.
 - Most selectors use stable element IDs; remaining text-based selectors try both languages automatically
 - If you encounter issues with a different UI language, run the UI inspector and share the output:
   ```bash
-  uv run python inspect_ui.py
+  uv run python tools/inspect_ui.py
   ```
   This opens Unit4, scans all UI elements, and saves their HTML attributes to `ui_inspection.json`.
 
@@ -419,7 +479,7 @@ uv run pytest
 - Locale configuration consistency (both locales define the same keys, non-empty values)
 
 **What requires manual verification:**
-- Browser automation against a live Unit4 instance (`./sync --check`, then `./sync --day YYYY-MM-DD --execute`)
+- Browser automation against a live Unit4 instance (`j2u4 --check`, then `j2u4 --day YYYY-MM-DD --execute`)
 - Session handling, login flow, 2FA
 
 ## Security
