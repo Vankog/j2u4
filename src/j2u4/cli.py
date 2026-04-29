@@ -199,7 +199,7 @@ def fetch_and_resolve_worklogs(
     valid_worklogs: list[TempoWorklog] = []
     unmapped_worklogs: list[TempoWorklog] = []
     week_worklog_ids: set[int] = set()
-    issue_summary_cache: dict[int, str] = {}
+    issue_cache: dict[int, dict] = {}  # issue_id -> {"key", "summary"}
     pending_resolution: list[tuple[dict, dict]] = []  # (account, raw_worklog) target-day only
 
     # Phase 1: collect everything across the whole week, per account
@@ -228,23 +228,22 @@ def fetch_and_resolve_worklogs(
         hours = wl["timeSpentSeconds"] / 3600
         description = wl.get("description", "")
 
-        # Issue summary best-effort (Jira lookup; may 404 silently)
-        summary = ""
-        if issue_id and issue_id not in issue_summary_cache:
+        # Issue lookup best-effort (Jira; may 404 silently for tickets the
+        # user has no permission on). Cache key + summary so repeat
+        # worklogs on the same issue cost one Jira call total.
+        if issue_id and issue_id not in issue_cache:
             issue_data = jira.get_issue_details(issue_id)
             if issue_data:
                 fields = issue_data.get("fields", {})
-                summary = (fields.get("summary") or "")[:100]
-            issue_summary_cache[issue_id] = summary
-        summary = issue_summary_cache.get(issue_id, "")
-        # Best-effort issue key — use the cached summary lookup if it has it
-        issue_key = ""
-        if issue_id and issue_id in issue_summary_cache:
-            # We didn't cache the key separately; rely on the worklog's
-            # description for context. Could enhance by caching key too.
-            pass
-        if not issue_key:
-            issue_key = wl.get("issue", {}).get("key") or f"ID:{issue_id}"
+                issue_cache[issue_id] = {
+                    "key": issue_data.get("key") or "",
+                    "summary": (fields.get("summary") or "")[:100],
+                }
+            else:
+                issue_cache[issue_id] = {"key": "", "summary": ""}
+        info = issue_cache.get(issue_id) or {"key": "", "summary": ""}
+        issue_key = info["key"] or wl.get("issue", {}).get("key") or f"ID:{issue_id}"
+        summary = info["summary"]
 
         result = resolve_arbauft(acc, mapping)
 

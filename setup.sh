@@ -113,6 +113,14 @@ echo
 echo "[5] Installing/refreshing global j2u4 command via uv..."
 uv tool install --from . j2u4 --reinstall
 
+# Ensure the uv-tool venv has Chromium too — Playwright caches binaries
+# globally under ~/.cache/ms-playwright, but the cache key is keyed to
+# the Playwright version. The local .venv and the uv-tool venv may
+# resolve to different Playwright versions, so install for the tool's
+# own venv as well.
+echo "[5b] Installing Chromium for the j2u4 tool venv..."
+uv tool run --from j2u4 playwright install chromium
+
 echo
 echo "========================================"
 if [ "$MODE" = "upgrade" ]; then
