@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -13,11 +14,24 @@ from pathlib import Path
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Frame, Page, Request, async_playwright, BrowserContext
 
-from models import TempoWorklog, Unit4Entry
-from patterns import Patterns
-from utils import SESSION_FILE
+from j2u4.models import TempoWorklog, Unit4Entry
+from j2u4.patterns import Patterns
+from j2u4.utils import session_path
 
-TIMEOUT = 10000  # 10 seconds
+
+def _default_capture_dir() -> Path:
+    """Platform-neutral temp location for failure captures.
+
+    Linux/macOS: /tmp/j2u4-captures (or whatever tempfile.gettempdir() returns)
+    Windows:     %TEMP%\\j2u4-captures (typically C:\\Users\\<user>\\AppData\\Local\\Temp)
+
+    The OS will eventually clean these out — Playwright traces are
+    diagnostic artefacts, not data to keep forever.
+    """
+    return Path(tempfile.gettempdir()) / "j2u4-captures"
+
+TIMEOUT = 10000  # 10 seconds — base value; instances scale this by slow_factor
+SLOW_MO_BASE = 100  # ms per Playwright action — base value; scaled by slow_factor
 DAY_NAMES = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # Bilingual day abbreviation pattern (DE + EN)
@@ -90,10 +104,21 @@ class FrameManager:
 class Unit4Browser:
     """Context manager for Unit4 browser session."""
 
-    def __init__(self, config: dict, headless: bool = False, slow_mo: int = 100):
+    def __init__(
+        self,
+        config: dict,
+        headless: bool = False,
+        slow_factor: int = 1,
+    ):
+        """slow_factor scales both Playwright's per-action slow_mo and the
+        click/wait timeouts. slow_factor=1 is the default; pass 2/4/6 etc.
+        to give a slow Unit4 server more breathing room without the
+        race-condition risk of trimming the asyncio.sleep blanket waits."""
         self.config = config
         self.headless = headless
-        self.slow_mo = slow_mo
+        self.slow_factor = max(1, int(slow_factor))
+        self.slow_mo = SLOW_MO_BASE * self.slow_factor
+        self._timeout = TIMEOUT * self.slow_factor
         self.unit4_url = config.get("unit4", {}).get("url")
         self._playwright = None
         self._browser = None
@@ -103,7 +128,9 @@ class Unit4Browser:
 
         debug_cfg = config.get("debug", {}) or {}
         self._capture_enabled: bool = bool(debug_cfg.get("capture_enabled", True))
-        self._capture_dir: Path = Path(debug_cfg.get("capture_dir", "./captures"))
+        self._capture_dir: Path = Path(
+            debug_cfg.get("capture_dir") or _default_capture_dir()
+        )
         self._capture_cap: int = int(debug_cfg.get("capture_cap", 10))
         self._capture_video: bool = bool(debug_cfg.get("capture_video", True))
         # Diagnostic mode: keep every chunk, not just failures. Set
@@ -140,8 +167,9 @@ class Unit4Browser:
         # record_video_dir must be set at new_context() time and Playwright
         # writes one .webm per page regardless).
         ctx_kwargs: dict = {"no_viewport": True, "locale": "de"}
-        if os.path.exists(SESSION_FILE):
-            ctx_kwargs["storage_state"] = SESSION_FILE
+        sess = session_path()
+        if sess.exists():
+            ctx_kwargs["storage_state"] = str(sess)
         if self._capture_enabled:
             ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
             self._capture_run_dir = self._capture_dir / f"RUN_{ts}"
@@ -325,9 +353,10 @@ class Unit4Browser:
         # asks for a fresh login. Note: we do NOT call context.close()
         # because that triggers a graceful logout request which Unit4
         # uses to invalidate the session server-side.
-        if self._context and os.path.exists(SESSION_FILE):
+        sess = session_path()
+        if self._context and sess.exists():
             try:
-                await self._context.storage_state(path=SESSION_FILE)
+                await self._context.storage_state(path=str(sess))
             except Exception:
                 pass
 
@@ -374,7 +403,9 @@ class Unit4Browser:
             print("[!] Session expired or not logged in.")
             print("    Please log in (2FA may be required), then press ENTER...")
             await asyncio.get_event_loop().run_in_executor(None, input)
-            await self._context.storage_state(path=SESSION_FILE)
+            sess = session_path()
+            sess.parent.mkdir(parents=True, exist_ok=True)
+            await self._context.storage_state(path=str(sess))
             print("    Session saved for future use.")
             await asyncio.sleep(2)
 
@@ -467,7 +498,7 @@ class Unit4Browser:
                         continue
 
                 if week_input:
-                    await week_input.click(timeout=TIMEOUT, force=True)
+                    await week_input.click(timeout=self._timeout, force=True)
                     await asyncio.sleep(0.3)
                     await week_input.press("Control+a")
                     await week_input.type(week, delay=30)
@@ -858,12 +889,12 @@ class Unit4Browser:
         try:
             zoom_btn = frame.locator("button[id$='_zoom']").first
             if await zoom_btn.count() > 0:
-                await zoom_btn.click(timeout=TIMEOUT)
+                await zoom_btn.click(timeout=self._timeout)
             else:
                 # Fallback: title-based
                 zoom_icons = await frame.locator("[title*='Detail']").all()
                 if zoom_icons:
-                    await zoom_icons[0].click(timeout=TIMEOUT)
+                    await zoom_icons[0].click(timeout=self._timeout)
                 else:
                     print("FAILED (no zoom)")
                     return False
@@ -899,7 +930,7 @@ class Unit4Browser:
         try:
             akt = frame.locator("input[id*='1680_Editor']:not([disabled])").first
             if await akt.count() > 0:
-                await akt.click(timeout=TIMEOUT)
+                await akt.click(timeout=self._timeout)
                 await akt.press("Control+a")
                 await self.page.keyboard.type("TEMPO", delay=50)
                 await asyncio.sleep(0.6)  # let combobox finish filtering
@@ -1004,96 +1035,6 @@ class Unit4Browser:
             await asyncio.sleep(0.1)
         return False
 
-    async def fill_open_dialog(self, worklog: TempoWorklog) -> dict:
-        """Fill ArbAuft/Text/Ticketno in an ALREADY-OPEN Zeiteingabe dialog.
-
-        The user is responsible for opening the dialog (Add + Zoom on the new
-        row in the browser). This avoids the row-selection bug where
-        scripted .first/.last zoom hits the wrong row.
-
-        Targets dialog-scoped inputs by their unique field codes from the
-        ground-truth dump in debug_dialog_inputs.py:
-          - ArbAuft  : input[id*='1678_Editor'] (dialog field code, NOT 1574)
-          - Aktivität: input[id*='1680_Editor'] (dialog, NOT 1576) — skipped
-          - Ticketno : input[id*='1688_Editor']
-          - Text     : the description_i input that is NOT disabled (the
-                       dialog has multiple description_i inputs, only one
-                       enabled)
-        """
-        description = worklog.description.strip() if worklog.description else worklog.issue_summary
-        # Total length budget: "[WL:NNNNN] " (~12 chars) + truncated description.
-        text = f"[WL:{worklog.worklog_id}] {description[:35]}"
-
-        result = {
-            "arbauft": False,
-            "aktivitaet": None,  # always manual
-            "text": False,
-            "ticketno": False,
-            "hours": False,
-            "dialog_open": True,  # caller asserts dialog is open
-            "expected_text": text,
-        }
-
-        frame = await self.frame_manager.get_content_frame()
-
-        # ArbAuft — dialog field code 1678
-        result["arbauft"] = await self._fill_field_by_id(
-            frame, "input[id*='1678_Editor']:not([disabled])", worklog.arbauft
-        )
-
-        # Wait for Aktivität input to be enabled (ArbAuft postback). Polls
-        # up to 4s with 0.1s steps — proceeds as soon as enabled.
-        await self._wait_for_enabled(frame, "input[id*='1680_Editor']", timeout_s=4.0)
-
-        # Aktivität — type "TEMPO" character by character so the combobox
-        # autocomplete filters per keystroke. Avoids the NOTEMPO substring
-        # snap. User verifies in the browser before clicking OK.
-        try:
-            akt = frame.locator("input[id*='1680_Editor']:not([disabled])").first
-            if await akt.count() > 0:
-                await akt.click(timeout=TIMEOUT)
-                await akt.press("Control+a")
-                await self.page.keyboard.type("TEMPO", delay=20)
-                await self.page.keyboard.press("Tab")
-                result["aktivitaet"] = True
-        except Exception:
-            result["aktivitaet"] = None  # falls through to manual
-
-        # Text — pick the one description_i that is enabled
-        result["text"] = await self._fill_field_by_id(
-            frame, "input[id*='description_i']:not([disabled])", text
-        )
-
-        # Ticketno — dialog field code 1688
-        result["ticketno"] = await self._fill_field_by_id(
-            frame, "input[id*='1688_Editor']:not([disabled])", worklog.issue_key
-        )
-
-        # Hours — use the proven _fill_hours_by_date flow which expands
-        # Zeitdetails, double-clicks the day cell, and fills the input that
-        # appears. Title-based selector on grid inputs does not work because
-        # those inputs are hidden behind the open dialog.
-        try:
-            result["hours"] = await self._fill_hours_by_date(frame, worklog.hours, worklog.date)
-        except Exception:
-            result["hours"] = False
-
-        return result
-
-    async def wait_for_dialog_to_close(self, timeout_s: float = 60.0) -> bool:
-        """Poll until the Add button reappears (= user clicked OK and dialog closed)."""
-        frame = await self.frame_manager.get_content_frame()
-        add_btn = frame.locator("button[id$='_newButton']").first
-        deadline = asyncio.get_event_loop().time() + timeout_s
-        while asyncio.get_event_loop().time() < deadline:
-            try:
-                if await add_btn.count() > 0 and await add_btn.is_visible(timeout=300):
-                    return True
-            except Exception:
-                pass
-            await asyncio.sleep(0.4)
-        return False
-
     async def _fill_field(self, frame: Frame, label: str, value: str) -> bool:
         """Fill a form field by its label."""
         label_variants = [label, f"{label}*", f"{label} *"]
@@ -1110,10 +1051,10 @@ class Unit4Browser:
                 try:
                     elem = strategy()
                     if await elem.count() > 0 and await elem.first.is_visible(timeout=300):
-                        await elem.first.click(timeout=TIMEOUT)
+                        await elem.first.click(timeout=self._timeout)
                         await asyncio.sleep(0.2)
                         await elem.first.press("Control+a")
-                        await elem.first.fill(value, timeout=TIMEOUT)
+                        await elem.first.fill(value, timeout=self._timeout)
                         await self.page.keyboard.press("Tab")
                         await asyncio.sleep(0.3)
                         return True
@@ -1141,7 +1082,7 @@ class Unit4Browser:
                     print(f"    Date {date_str} not in structure, retrying...", flush=True)
                     zeit = frame.locator("text=/.*(?:Zeitdetails|Time details)/").first
                     if await zeit.count() > 0:
-                        await zeit.click(timeout=TIMEOUT)
+                        await zeit.click(timeout=self._timeout)
                         await asyncio.sleep(1.5)
                     continue
                 print(f"    [!] Date {date_str} not found. Available: {list(date_to_label.keys())}")
@@ -1186,7 +1127,7 @@ class Unit4Browser:
                     print("no cell visible, retry...", flush=True)
                     continue
 
-                await erfasst_cell.dblclick(timeout=TIMEOUT)
+                await erfasst_cell.dblclick(timeout=self._timeout)
                 await asyncio.sleep(0.8)
 
                 # Find active input
@@ -1251,7 +1192,7 @@ class Unit4Browser:
             try:
                 legend = frame.locator(f"legend:has-text('{td_text}')").first
                 if await legend.count() > 0 and await legend.is_visible(timeout=300):
-                    await legend.click(timeout=TIMEOUT)
+                    await legend.click(timeout=self._timeout)
                     await asyncio.sleep(1)
                     return True
             except Exception:
@@ -1296,30 +1237,12 @@ class Unit4Browser:
 
         return date_to_label
 
-    async def _cancel_and_recover(self, frame: Frame) -> None:
-        """Cancel the current dialog and wait until the list view is ready."""
-        for locale in ("de", "en"):
-            if await self._click_button(frame, LOCALE_STRINGS[locale]["cancel"]):
-                break
-        await asyncio.sleep(1)
-        # Confirm discard dialog if it appears (Ja/Yes)
-        for locale in ("de", "en"):
-            if await self._click_button(frame, LOCALE_STRINGS[locale]["confirm_yes"]):
-                break
-        await asyncio.sleep(2)
-        # Wait for Add button to reappear (list view ready)
-        add_btn = frame.locator("button[id$='_newButton']").first
-        for _ in range(10):
-            if await add_btn.count() > 0 and await add_btn.is_visible(timeout=500):
-                return
-            await asyncio.sleep(0.5)
-
     async def _click_by_id(self, frame: Frame, selector: str) -> bool:
         """Click an element by CSS selector (typically ID-based)."""
         try:
             elem = frame.locator(selector).first
             if await elem.count() > 0 and await elem.is_visible(timeout=500):
-                await elem.click(timeout=TIMEOUT)
+                await elem.click(timeout=self._timeout)
                 return True
         except Exception:
             pass
@@ -1336,10 +1259,10 @@ class Unit4Browser:
             base = frame.locator(selector)
             elem = base.last if use_last else base.first
             if await elem.count() > 0 and await elem.is_visible(timeout=500):
-                await elem.click(timeout=TIMEOUT)
+                await elem.click(timeout=self._timeout)
                 await asyncio.sleep(0.2)
                 await elem.press("Control+a")
-                await elem.fill(value, timeout=TIMEOUT)
+                await elem.fill(value, timeout=self._timeout)
                 await self.page.keyboard.press("Tab")
                 await asyncio.sleep(0.3)
                 return True
@@ -1361,7 +1284,7 @@ class Unit4Browser:
             try:
                 elem = strategy()
                 if await elem.count() > 0 and await elem.is_visible(timeout=300):
-                    await elem.click(timeout=TIMEOUT)
+                    await elem.click(timeout=self._timeout)
                     return True
             except Exception:
                 continue

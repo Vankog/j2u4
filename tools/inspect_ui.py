@@ -14,7 +14,7 @@ import json
 import os
 from playwright.async_api import async_playwright, Frame
 
-from utils import load_config_safe, SESSION_FILE
+from j2u4.utils import load_config_safe, session_path
 
 ELEMENTS_TO_INSPECT = [
     {
@@ -212,9 +212,10 @@ async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False, slow_mo=100)
 
-        if os.path.exists(SESSION_FILE):
+        sess = session_path()
+        if sess.exists():
             print("[*] Loading session...")
-            context = await browser.new_context(storage_state=SESSION_FILE)
+            context = await browser.new_context(storage_state=str(sess))
         else:
             context = await browser.new_context()
 
@@ -229,7 +230,8 @@ async def main():
         if "Login" in await page.title():
             print("[!] Please log in (2FA if needed), then press ENTER...")
             await asyncio.get_event_loop().run_in_executor(None, input)
-            await context.storage_state(path=SESSION_FILE)
+            sess.parent.mkdir(parents=True, exist_ok=True)
+            await context.storage_state(path=str(sess))
             await asyncio.sleep(2)
 
         # Inspect main page (before navigating to Zeiterfassung)

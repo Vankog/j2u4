@@ -9,8 +9,8 @@ import re
 
 import pytest
 
-from patterns import Patterns
-from unit4_browser import DAY_ABBREV_PATTERN, LOCALE_STRINGS
+from j2u4.browser import DAY_ABBREV_PATTERN, LOCALE_STRINGS
+from j2u4.patterns import Patterns
 
 
 # ---------------------------------------------------------------------------

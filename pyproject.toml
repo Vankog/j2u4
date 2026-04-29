@@ -11,6 +11,19 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+# Console entry point: `uv tool install --from . j2u4` (or `pipx install .`)
+# yields a global `j2u4` command that runs the sync.
+[project.scripts]
+j2u4 = "j2u4.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
-testpaths = ["."]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
+pythonpath = ["src"]

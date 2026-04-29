@@ -10,9 +10,14 @@
   "unit4": {
     "url": "https://ubw.unit4cloud.com/YOUR_TENANT/Default.aspx"
   },
+  "mapping": {
+    "help_urls": [
+      "https://your-domain.atlassian.net/wiki/spaces/YOUR_SPACE/pages/.../Customer+Projects",
+      "https://your-domain.atlassian.net/wiki/spaces/YOUR_SPACE/pages/.../Internal+Projects"
+    ]
+  },
   "debug": {
     "capture_enabled": true,
-    "capture_dir": "./captures",
     "capture_cap": 10,
     "capture_video": true
   }

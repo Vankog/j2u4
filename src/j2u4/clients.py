@@ -57,14 +57,22 @@ class JiraClient:
         return r.json()["accountId"]
 
     def get_issue_details(self, issue_id: int) -> dict | None:
-        """Fetch issue details (key, summary, account field)."""
-        r = requests.get(
-            f"{self.base_url}/rest/api/3/issue/{issue_id}",
-            auth=(self.email, self.token),
-            headers={"Accept": "application/json"},
-            params={"fields": f"key,summary,{ACCOUNT_FIELD}"},
-            timeout=10,
-        )
+        """Fetch issue details (key, summary, account field).
+
+        Best-effort: returns None on any non-200 (404 = no permission to read
+        this issue, common for cross-team tickets). Callers must handle None
+        as "summary unavailable" without crashing.
+        """
+        try:
+            r = requests.get(
+                f"{self.base_url}/rest/api/3/issue/{issue_id}",
+                auth=(self.email, self.token),
+                headers={"Accept": "application/json"},
+                params={"fields": f"key,summary,{ACCOUNT_FIELD}"},
+                timeout=10,
+            )
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            return None
         if r.status_code == 200:
             return r.json()
         return None
@@ -76,14 +84,9 @@ class TempoClient:
     def __init__(self, config: dict):
         self.token = config["tempo"]["api_token"]
 
-    def fetch_worklogs(
-        self, account_id: str, date_from: str, date_to: str
-    ) -> list[dict]:
-        """Fetch worklogs for a user within a date range."""
-        worklogs = []
-        url = f"https://api.tempo.io/4/worklogs/user/{account_id}"
-        params = {"from": date_from, "to": date_to, "limit": 1000}
-
+    def _paginated_get(self, url: str, params: dict) -> list[dict]:
+        """GET a paginated Tempo endpoint, return concatenated results."""
+        results: list[dict] = []
         while url:
             try:
                 r = requests.get(
@@ -103,11 +106,34 @@ class TempoClient:
             if not r.ok:
                 raise ApiError(_handle_api_error(r, "Tempo"), r.status_code)
             data = r.json()
+            results.extend(data.get("results", []))
+            url = (data.get("metadata") or {}).get("next")
+            params = {}  # pagination URLs already carry params
+        return results
 
-            worklogs.extend(data.get("results", []))
+    def fetch_worklogs(
+        self, account_id: str, date_from: str, date_to: str
+    ) -> list[dict]:
+        """Fetch worklogs for a user within a date range."""
+        return self._paginated_get(
+            f"https://api.tempo.io/4/worklogs/user/{account_id}",
+            {"from": date_from, "to": date_to, "limit": 1000},
+        )
 
-            # Handle pagination
-            url = data.get("metadata", {}).get("next")
-            params = {}  # Clear params for pagination URLs
+    def fetch_accounts(self) -> list[dict]:
+        """Fetch all Tempo accounts the token has access to."""
+        return self._paginated_get(
+            "https://api.tempo.io/4/accounts",
+            {"limit": 200},
+        )
 
-        return worklogs
+    def fetch_worklogs_by_account(
+        self, account_key: str, date_from: str, date_to: str
+    ) -> list[dict]:
+        """Fetch worklogs for a Tempo account within a date range. The Tempo
+        account is implicit in the URL — no Jira issue lookup needed to
+        resolve the account."""
+        return self._paginated_get(
+            f"https://api.tempo.io/4/worklogs/account/{account_key}",
+            {"from": date_from, "to": date_to, "limit": 1000},
+        )
