@@ -67,7 +67,10 @@ git clone <repo-url>
 cd j2u4
 ./setup.sh
 
-# 2. Edit config.json with your API tokens
+# 2. Configure j2u4 (interactive prompt — Jira / Tempo / Unit4 tokens
+#    + helper links, hidden token input, writes the config to
+#    ~/.config/j2u4/config.json)
+j2u4 --init
 
 # 3. Test connectivity
 j2u4 --check
@@ -108,10 +111,15 @@ This will:
 - Verify `uv` is installed
 - Install Python + dependencies into a local `.venv` (`uv sync`)
 - Install Chromium for Playwright (`uv run playwright install chromium`)
-- Create `config.json` from `config.example.json` (if missing)
-- Create empty `mapping.json` (if missing)
+- Bootstrap a `config.json` skeleton in the user-config dir (if missing)
+- Create an empty `mapping.json` (if missing)
 - **Install `j2u4` as a global command** via `uv tool install --from . j2u4`
   — afterwards `j2u4 …` works from any directory
+
+After `setup.sh` finishes, run `j2u4 --init` to fill in the config
+interactively (Jira / Tempo / Unit4 tokens with helper links and hidden
+input). The skeleton from `setup.sh` is just a placeholder — `--init`
+overwrites it with real values.
 
 > **Note:** `uv tool install` puts the executable in `~/.local/bin`. If
 > that directory is not in your `$PATH`, `uv` prints a one-line hint
@@ -124,12 +132,16 @@ This will:
 uv sync
 uv run playwright install chromium
 
-# 2. Config file
-cp config.example.json config.json
-echo "{}" > mapping.json
-
-# 3. Install global `j2u4` command
+# 2. Install global `j2u4` command
 uv tool install --from . j2u4
+
+# 3. Create the config (interactive prompt with helper links — recommended)
+j2u4 --init
+
+# …or by hand into the user-config dir:
+mkdir -p ~/.config/j2u4
+cp config.example.json ~/.config/j2u4/config.json
+$EDITOR ~/.config/j2u4/config.json
 ```
 
 ### Updating
