@@ -18,6 +18,8 @@ Usage:
 import argparse
 import asyncio
 import sys
+from datetime import datetime
+from pathlib import Path
 
 import requests
 
@@ -32,6 +34,44 @@ from utils import (
     load_mapping,
     save_mapping,
 )
+
+
+class TrackingLog:
+    """Append-only history log for sync runs.
+
+    One block per sync invocation: header with timestamp + mode + week + day,
+    one line per DELETE/CREATE action, closing SAVE line. Self-protected —
+    a log-write failure must never abort the sync itself.
+    """
+
+    def __init__(self, path: str = "./sync_history.log"):
+        self.path = Path(path)
+
+    def _append(self, line: str) -> None:
+        try:
+            with self.path.open("a") as f:
+                f.write(line)
+        except Exception as e:
+            print(f"[!] tracking log write failed: {e}")
+
+    def open_block(self, mode: str, week: str, day: str | None) -> None:
+        ts = datetime.now().isoformat(timespec="seconds")
+        day_str = day or "all"
+        self._append(f"\n=== {ts} mode={mode} week={week} day={day_str} ===\n")
+
+    def log_delete(self, wl_id: int | None, ticket: str) -> None:
+        if wl_id is None:
+            return
+        self._append(f"DELETE [WL:{wl_id}] {ticket}\n")
+
+    def log_create(self, wl: TempoWorklog) -> None:
+        self._append(
+            f"CREATE [WL:{wl.worklog_id}] {wl.issue_key} {wl.hours}h {wl.arbauft}\n"
+        )
+
+    def close_block(self, save_status: str, capture_ref: str | None = None) -> None:
+        suffix = f" ref={capture_ref}" if capture_ref else ""
+        self._append(f"SAVE {save_status}{suffix}\n")
 
 
 def check_connectivity(config: dict) -> bool:
@@ -460,10 +500,9 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
         print("[*] No worklogs to sync. Done.")
         return
 
-    # Semi-auto flow when --day is used (and not dry-run)
-    if days and not dry_run:
-        await sync_semi_auto(week, valid_worklogs, config)
-        return
+    target_day = days[0] if days else None
+    mode = "day-auto" if target_day else "week-bulk"
+    tracking = TrackingLog()
 
     # Connect to Unit4
     print()
@@ -506,6 +545,19 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
         existing_entries = await unit4.extract_entries(debug=True)
         print(f"    Found {len(existing_entries)} synced entries")
 
+        # In per-day mode, only delete entries whose worklog_id belongs to the
+        # target day's Tempo worklogs. Markers from other days stay untouched.
+        if target_day:
+            target_wl_ids = {wl.worklog_id for wl in valid_worklogs}
+            before = len(existing_entries)
+            existing_entries = [
+                e for e in existing_entries if e.worklog_id in target_wl_ids
+            ]
+            print(
+                f"    [day-auto] Filtered existing entries by target day: "
+                f"{len(existing_entries)}/{before} match worklog ids of {target_day}"
+            )
+
         print()
         print("[6] Status:")
         print(f"    - Existing [WL:] entries to delete: {len(existing_entries)}")
@@ -524,10 +576,18 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
             print()
             print("Run with --execute to apply changes.")
         else:
+            tracking.open_block(mode=mode, week=week, day=target_day)
+
             # Delete existing entries
             if existing_entries:
+                # Snapshot ids for logging — only those that disappear after
+                # the (possibly multi-pass) delete will be logged as deleted.
+                ids_before_delete = {
+                    (e.worklog_id, e.ticketno) for e in existing_entries
+                }
+
                 print()
-                print("[6.1] Deleting ALL existing [WL:] entries...")
+                print("[6.1] Deleting existing [WL:] entries...")
                 await unit4.delete_entries(existing_entries)
 
                 # Re-scan and repeat if needed
@@ -539,8 +599,24 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
                     if not remaining:
                         print("    All [WL:] entries deleted successfully")
                         break
+                    # In day-auto, the rescan returns the whole week — filter
+                    # again so we only retry our target day's worklogs.
+                    if target_day:
+                        target_wl_ids = {wl.worklog_id for wl in valid_worklogs}
+                        remaining = [r for r in remaining if r.worklog_id in target_wl_ids]
+                        if not remaining:
+                            print("    All target-day [WL:] entries deleted")
+                            break
                     print(f"    {len(remaining)} [WL:] entries still exist, deleting again...")
                     await unit4.delete_entries(remaining)
+
+                # Log what actually disappeared
+                still_there_ids = set()
+                if remaining:
+                    still_there_ids = {r.worklog_id for r in remaining}
+                for wl_id, ticket in ids_before_delete:
+                    if wl_id not in still_there_ids:
+                        tracking.log_delete(wl_id, ticket)
 
             # Create new entries
             print()
@@ -548,7 +624,9 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
             errors = []
             for wl in valid_worklogs:
                 success = await unit4.create_entry(wl)
-                if not success:
+                if success:
+                    tracking.log_create(wl)
+                else:
                     errors.append(wl)
 
             if errors:
@@ -570,11 +648,18 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
             # Save
             print()
             print("[8] Saving...")
-            if await unit4.save():
+            save_ok = await unit4.save()
+            if save_ok:
                 print("    Saved!")
             else:
                 print("    [!] Click Speichern manually")
                 await asyncio.get_event_loop().run_in_executor(None, input)
+
+            capture_ref = None
+            if unit4._capture_run_dir is not None and unit4._capture_count > 0:
+                capture_ref = str(unit4._capture_run_dir)
+            status = "ok" if save_ok and not errors else "fail"
+            tracking.close_block(save_status=status, capture_ref=capture_ref)
 
         # Print final summary
         print()
@@ -657,8 +742,8 @@ Examples:
         "--day",
         action="append",
         metavar="YYYY-MM-DD",
-        help="Sync only worklogs on this date (repeatable). Triggers semi-automatic mode: "
-        "script fills ArbAuft/Aktivität/Text/Ticketno, you enter hours and click OK manually.",
+        help="Sync only worklogs on this date. With --execute: fully automatic single-day sync. "
+        "Without --execute: dry-run preview. Pass at most one --day per invocation.",
     )
 
     args = parser.parse_args()
@@ -685,9 +770,16 @@ Examples:
         print(f"Error: Invalid cutover format '{args.cutover}'. Expected YYYY-MM-DD")
         return 1
 
-    # In semi-auto (--day) mode, --execute is implicit (no dry-run for individual days)
-    execute = args.execute or bool(args.day)
-    asyncio.run(sync(week, args.cutover, execute, args.end, args.limit, args.day))
+    # Per-day mode is single-day only — multi-day in one invocation is no
+    # longer supported (atomicity guarantees per call only).
+    if args.day and len(args.day) > 1:
+        print(
+            f"Error: pass at most one --day per invocation (got {len(args.day)}). "
+            "Run the script once per day."
+        )
+        return 1
+
+    asyncio.run(sync(week, args.cutover, args.execute, args.end, args.limit, args.day))
     return 0
 
 
