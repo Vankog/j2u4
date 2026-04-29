@@ -53,9 +53,9 @@ cd j2u4
 # 3. Test connectivity
 ./sync --check
 
-# 4. Sync a week (dry-run first, then execute)
-./sync 202606
-./sync 202606 --execute
+# 4. Sync a day (dry-run first, then execute)
+./sync --day 2026-04-29
+./sync --day 2026-04-29 --execute
 ```
 
 ## How it works
@@ -419,7 +419,7 @@ uv run pytest
 - Locale configuration consistency (both locales define the same keys, non-empty values)
 
 **What requires manual verification:**
-- Browser automation against a live Unit4 instance (`./sync --check`, then `./sync YYYYWW`)
+- Browser automation against a live Unit4 instance (`./sync --check`, then `./sync --day YYYY-MM-DD --execute`)
 - Session handling, login flow, 2FA
 
 ## Security
