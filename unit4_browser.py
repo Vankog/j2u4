@@ -319,13 +319,18 @@ class Unit4Browser:
                 pass
             self._tracing_active = False
 
-        # Close context explicitly so Playwright finalises the video file.
-        # browser.close() alone leaves the .webm at 0 bytes.
-        if self._context:
+        # Persist refreshed cookies before closing the browser. Unit4 rotates
+        # session tokens during a run — without writing them back, the
+        # session.json is stuck at the boot-time state and the next run
+        # asks for a fresh login. Note: we do NOT call context.close()
+        # because that triggers a graceful logout request which Unit4
+        # uses to invalidate the session server-side.
+        if self._context and os.path.exists(SESSION_FILE):
             try:
-                await self._context.close()
+                await self._context.storage_state(path=SESSION_FILE)
             except Exception:
                 pass
+
         if self._browser:
             await self._browser.close()
         if self._playwright:
