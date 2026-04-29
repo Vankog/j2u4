@@ -120,10 +120,15 @@ After pulling new commits from the repo:
 ```bash
 cd j2u4
 git pull
-./setup.sh         # idempotent — runs uv tool install --reinstall internally
+./setup.sh --upgrade
 ```
 
-Or, if you only want to refresh the binary without re-running every step:
+`--upgrade` refreshes deps + Chromium + the global `j2u4` binary, but
+skips the config/mapping bootstrap (those are already present after the
+first run). Without the flag, `./setup.sh` does the full install — also
+idempotent, but a few extra "already exists" lines.
+
+If you only want to refresh the binary without re-running every step:
 
 ```bash
 uv tool install --from . j2u4 --reinstall
