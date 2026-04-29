@@ -29,6 +29,7 @@ from j2u4.utils import (
     load_config_safe,
     load_mapping,
     save_mapping,
+    sync_history_path,
     user_config_dir,
 )
 
@@ -197,8 +198,9 @@ class TrackingLog:
     a log-write failure must never abort the sync itself.
     """
 
-    def __init__(self, path: str = "./sync_history.log"):
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None):
+        self.path = Path(path) if path is not None else sync_history_path()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def _append(self, line: str) -> None:
         try:

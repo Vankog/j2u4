@@ -15,6 +15,7 @@ SESSION_FILENAME = "session.json"
 CONFIG_FILENAME = "config.json"
 MAPPING_FILENAME = "mapping.json"
 LEGACY_MAPPING_FILENAME = "account_to_arbauft_mapping.json"
+SYNC_HISTORY_FILENAME = "sync_history.log"
 
 
 def user_config_dir() -> Path:
@@ -61,6 +62,10 @@ def legacy_mapping_path() -> Path:
 
 def session_path() -> Path:
     return _resolve_dir() / SESSION_FILENAME
+
+
+def sync_history_path() -> Path:
+    return _resolve_dir() / SYNC_HISTORY_FILENAME
 
 
 def load_config() -> dict:

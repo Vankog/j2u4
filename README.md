@@ -15,6 +15,20 @@ This tool automates browser interactions with Unit4, which may break at any time
 
 By using this software, you acknowledge that you are solely responsible for any consequences of its use.
 
+### Tested platforms
+
+- **Tested**: Linux with German Unit4 UI / German locale formats
+  (`DD/MM` dates, comma decimals — the browser context is hardcoded to
+  `locale='de'` because Unit4 silently strips period decimals).
+- **NOT tested**: Windows. WSL is the recommended path on Windows
+  hosts; native Windows is not exercised.
+- **NOT tested**: English Unit4 UI / English locale formats. The
+  codebase has bilingual selectors (LOCALE_STRINGS, day patterns) but
+  no live verification against an EN-localised tenant yet (Issue #3).
+
+If you run j2u4 successfully on either of those untested combinations,
+a note on Issue #3 is welcome.
+
 ## Requirements
 
 You only need **one tool** installed up front: `uv`. Python comes
@@ -328,9 +342,9 @@ belongs to the target day. Other days' markers stay untouched. If the run
 hangs or fails, only one day is affected; other days can be re-run in
 their own invocations.
 
-Each `--execute` run appends a block to `./sync_history.log` (gitignored)
-so you can see which markers were deleted and created — see
-[Tracking log](#tracking-log) below.
+Each `--execute` run appends a block to `sync_history.log` in the
+user-config directory (gitignored) so you can see which markers were
+deleted and created — see [Tracking log](#tracking-log) below.
 
 ### What the script does
 
@@ -386,7 +400,10 @@ is in the visible week and recreate it correctly.
 
 ### Tracking log
 
-Each `--execute` run appends a block to `./sync_history.log`:
+Each `--execute` run appends a block to `sync_history.log` in the
+user-config directory (`~/.config/j2u4/sync_history.log` on Linux/macOS,
+`%APPDATA%\j2u4\sync_history.log` on Windows; override via
+`$J2U4_CONFIG_DIR`):
 
 ```
 === 2026-04-27T18:30:15 week=202618 day=2026-04-27 ===
@@ -418,10 +435,6 @@ j2u4/
 ├── setup.sh                      — one-time setup (deps + uv tool install)
 ├── README.md
 ├── config.example.json           — template
-├── config.json                   — credentials (gitignored)
-├── mapping.json — mapping (gitignored)
-├── session.json                  — browser session (gitignored)
-├── sync_history.log              — append-only per-run log (gitignored)
 ├── src/j2u4/
 │   ├── cli.py                    — argparse + sync orchestration (j2u4 cmd)
 │   ├── browser.py                — Playwright Unit4 automation
@@ -435,6 +448,7 @@ j2u4/
 │   ├── test_capture_failure.py   — failure-capture helper (4 tests)
 │   ├── test_per_day_sync.py      — filter + tracking log (7 tests)
 │   ├── test_mapping_resolver.py  — resolver pipeline (7 tests)
+│   ├── test_ask_for_arbauft.py   — interactive prompt (7 tests)
 │   └── test_jira_connection.py   — manual Jira/Tempo smoke (live)
 └── tools/
     ├── inspect_ui.py             — dump Unit4 element attributes
