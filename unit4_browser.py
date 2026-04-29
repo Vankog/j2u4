@@ -891,7 +891,9 @@ class Unit4Browser:
 
         # Aktivität is an ARIA combobox. fill("TEMPO") snaps to NOTEMPO
         # because Unit4 selects the first alphabetical match. Workaround:
-        # type per-character so the combobox filters correctly per keystroke.
+        # type per-character, give the combobox time to filter, then commit.
+        # Without the sleep, Tab fires before Unit4 finishes filtering and
+        # the still-default selection (NOTEMPO) gets accepted.
         print("Aktivität...", end=" ", flush=True)
         aktivitaet_ok = False
         try:
@@ -899,7 +901,8 @@ class Unit4Browser:
             if await akt.count() > 0:
                 await akt.click(timeout=TIMEOUT)
                 await akt.press("Control+a")
-                await self.page.keyboard.type("TEMPO", delay=20)
+                await self.page.keyboard.type("TEMPO", delay=50)
+                await asyncio.sleep(0.6)  # let combobox finish filtering
                 await self.page.keyboard.press("Tab")
                 aktivitaet_ok = True
         except Exception:
@@ -944,13 +947,27 @@ class Unit4Browser:
         if any_fail:
             print(f"    [!] UNVOLLSTÄNDIG: {worklog.arbauft} | {text} | {worklog.issue_key} | {day_name}: {hours_str}h")
 
-        # Click OK to close dialog. Filter to enabled button — Unit4 has
-        # multiple s108_apply elements in the DOM (different dialog layers),
-        # only the active dialog's button is enabled. Without the filter,
-        # nth=0 hits a hidden/disabled button and click() times out 10s.
-        ok_clicked = await self._click_by_id(
-            frame, "button[id$='s108_apply']:not([disabled])"
-        )
+        # Click OK to close dialog. Unit4 has several s108_apply buttons in
+        # the DOM (one per dialog layer / popup); the :not([disabled]) filter
+        # alone is not sufficient because more than one is enabled at the
+        # same time. Iterate the matches and click the first VISIBLE one.
+        # nth=0 with click(timeout=10s) used to burn 10s per chunk hitting
+        # a hidden enabled button.
+        ok_clicked = False
+        applies = frame.locator("button[id$='s108_apply']:not([disabled])")
+        try:
+            n = await applies.count()
+        except Exception:
+            n = 0
+        for i in range(n):
+            candidate = applies.nth(i)
+            try:
+                if await candidate.is_visible(timeout=300):
+                    await candidate.click(timeout=2000)
+                    ok_clicked = True
+                    break
+            except Exception:
+                continue
         if not ok_clicked:
             ok_clicked = await self._click_button(frame, "OK")
         if not ok_clicked:
