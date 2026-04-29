@@ -207,6 +207,7 @@ def fetch_and_resolve_worklogs(
     week_worklog_ids: set[int] = set()
     issue_cache: dict[int, dict] = {}  # issue_id -> {"key", "summary"}
     pending_resolution: list[tuple[dict, dict]] = []  # (account, raw_worklog) target-day only
+    mapping_dirty = [False]  # 1-element list so the inner loop can mutate it
 
     # Phase 1: collect everything across the whole week, per account
     for acc in open_accounts:
@@ -256,6 +257,27 @@ def fetch_and_resolve_worklogs(
 
         result = resolve_arbauft(acc, mapping)
 
+        # Auto-persist: when the Tempo account name itself carries the
+        # workorder AND the file has no entry yet, write it back. This:
+        #   - grows mapping.json silently as new accounts are seen
+        #   - lets future runs detect drift via the conflict path if the
+        #     Tempo name later changes
+        # We never overwrite an existing file entry — drift resolution
+        # stays explicit (user prompt).
+        acc_id_str = str(acc.get("id") or "")
+        if (
+            result.source == "name"
+            and result.arbauft
+            and acc_id_str
+            and acc_id_str not in mapping
+        ):
+            mapping[acc_id_str] = {
+                "unit4_arbauft": result.arbauft,
+                "tempo_name": acc.get("name") or "",
+                "auto_synced_from_tempo": True,
+            }
+            mapping_dirty[0] = True
+
         worklog = TempoWorklog(
             worklog_id=worklog_id,
             issue_id=issue_id,
@@ -264,7 +286,7 @@ def fetch_and_resolve_worklogs(
             date=date,
             hours=hours,
             description=description,
-            account_key=str(acc.get("id") or ""),
+            account_key=acc_id_str,
             account_name=acc.get("name") or "",
             arbauft=result.arbauft,
         )
@@ -275,6 +297,10 @@ def fetch_and_resolve_worklogs(
             valid_worklogs.append(worklog)
         else:
             unmapped_worklogs.append(worklog)
+
+    if mapping_dirty[0]:
+        save_mapping(mapping)
+        print(f"[*] Mapping file updated with {sum(1 for v in mapping.values() if v.get('auto_synced_from_tempo')):d} auto-synced entries (from tempo account names)")
 
     return valid_worklogs, unmapped_worklogs, week_worklog_ids
 
