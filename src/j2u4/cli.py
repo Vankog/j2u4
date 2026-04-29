@@ -392,6 +392,10 @@ async def sync(
             arbauft = ask_for_arbauft(wl, mapping, help_urls=help_urls)
             if arbauft:
                 wl.arbauft = arbauft
+                # Mark this worklog so the summary shows "from prompt"
+                # instead of an empty source.
+                if hasattr(wl, "_resolve_result"):
+                    wl._resolve_result.source = "manual"
                 valid_worklogs.append(wl)
             else:
                 skipped_count += 1
@@ -400,13 +404,25 @@ async def sync(
     print()
     print("[3] Summary of worklogs to sync:")
     total_hours = 0
+    source_counts: dict[str, int] = {}
     for wl in sorted(valid_worklogs, key=lambda x: (x.date, x.issue_key)):
+        result = getattr(wl, "_resolve_result", None)
+        # Display label for the resolution source. "name" hits the
+        # tempo-account-name regex, "file" hits mapping.json, "manual"
+        # came in via the prompt during this run.
+        src = (result.source if result is not None else None) or "manual"
+        src_label = {"name": "tempo-name", "file": "file", "manual": "prompt"}.get(src, src)
+        source_counts[src_label] = source_counts.get(src_label, 0) + 1
         print(
-            f"    {wl.date} | {wl.hours:5.2f}h | {wl.issue_key:<15} | {wl.arbauft} [WL:{wl.worklog_id}]"
+            f"    {wl.date} | {wl.hours:5.2f}h | {wl.issue_key:<15} | "
+            f"{wl.arbauft} [{src_label}] [WL:{wl.worklog_id}]"
         )
         total_hours += wl.hours
     print(f"    {'─' * 60}")
     print(f"    Total: {total_hours:.2f}h across {len(valid_worklogs)} entries")
+    if source_counts:
+        breakdown = ", ".join(f"{n} from {src}" for src, n in sorted(source_counts.items()))
+        print(f"    Resolved: {breakdown}")
 
     if not valid_worklogs:
         print()
