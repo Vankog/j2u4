@@ -947,27 +947,18 @@ class Unit4Browser:
         if any_fail:
             print(f"    [!] UNVOLLSTÄNDIG: {worklog.arbauft} | {text} | {worklog.issue_key} | {day_name}: {hours_str}h")
 
-        # Click OK to close dialog. Unit4 has several s108_apply buttons in
-        # the DOM (one per dialog layer / popup); the :not([disabled]) filter
-        # alone is not sufficient because more than one is enabled at the
-        # same time. Iterate the matches and click the first VISIBLE one.
-        # nth=0 with click(timeout=10s) used to burn 10s per chunk hitting
-        # a hidden enabled button.
+        # Click OK to close dialog. Trace evidence: s108_apply matches an
+        # enabled+visible button that nonetheless fails actionability checks
+        # (likely the inline grid OK behind the dialog overlay). The only
+        # selector that reliably hits the active dialog's OK is the ARIA
+        # role-based one. Use that first; fall back to _click_button if the
+        # role lookup fails.
         ok_clicked = False
-        applies = frame.locator("button[id$='s108_apply']:not([disabled])")
         try:
-            n = await applies.count()
+            await frame.get_by_role("button", name="OK").first.click(timeout=2000)
+            ok_clicked = True
         except Exception:
-            n = 0
-        for i in range(n):
-            candidate = applies.nth(i)
-            try:
-                if await candidate.is_visible(timeout=300):
-                    await candidate.click(timeout=2000)
-                    ok_clicked = True
-                    break
-            except Exception:
-                continue
+            pass
         if not ok_clicked:
             ok_clicked = await self._click_button(frame, "OK")
         if not ok_clicked:
