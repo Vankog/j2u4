@@ -113,13 +113,20 @@ echo
 echo "[5] Installing/refreshing global j2u4 command via uv..."
 uv tool install --from . j2u4 --reinstall
 
-# Ensure the uv-tool venv has Chromium too — Playwright caches binaries
-# globally under ~/.cache/ms-playwright, but the cache key is keyed to
-# the Playwright version. The local .venv and the uv-tool venv may
-# resolve to different Playwright versions, so install for the tool's
-# own venv as well.
+# Ensure the uv-tool venv has Chromium too. Playwright caches binaries
+# under ~/.cache/ms-playwright keyed by Playwright version; the local
+# .venv and the uv-tool venv may resolve to different Playwright
+# versions, so install for the tool venv directly via its own
+# `playwright` binary (avoids the `uv tool run --from j2u4 playwright`
+# warning about playwright not being a j2u4-owned executable).
 echo "[5b] Installing Chromium for the j2u4 tool venv..."
-uv tool run --from j2u4 playwright install chromium
+TOOL_PLAYWRIGHT="$(uv tool dir 2>/dev/null)/j2u4/bin/playwright"
+if [ -x "$TOOL_PLAYWRIGHT" ]; then
+    "$TOOL_PLAYWRIGHT" install chromium
+else
+    # Fallback for older uv layouts
+    uv tool run --from j2u4 playwright install chromium
+fi
 
 echo
 echo "========================================"
