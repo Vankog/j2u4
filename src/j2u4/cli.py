@@ -191,9 +191,15 @@ def fetch_and_resolve_worklogs(
     tempo = TempoClient(config)
     jira = JiraClient(config)
 
+    # Per-account worklog endpoints return worklogs from EVERY user that
+    # booked on that Tempo account — not just ours. Filter client-side
+    # against the current user's Jira accountId so we don't accidentally
+    # pull (or, worse, sync into Unit4) a colleague's worklogs.
+    my_account_id = jira.get_my_account_id()
+
     accounts = tempo.fetch_accounts()
     open_accounts = [a for a in accounts if a.get("status") == "OPEN"]
-    print(f"[*] {len(open_accounts)} open Tempo accounts to scan")
+    print(f"[*] {len(open_accounts)} open Tempo accounts to scan (filtering to current user)")
 
     week_from, week_to = week_dates
     valid_worklogs: list[TempoWorklog] = []
@@ -213,6 +219,9 @@ def fetch_and_resolve_worklogs(
             print(f"[!] Tempo: skipping account {key}: {e}")
             continue
         for wl in wls:
+            author_id = (wl.get("author") or {}).get("accountId")
+            if author_id != my_account_id:
+                continue  # not our worklog — skip silently
             week_worklog_ids.add(wl["tempoWorklogId"])
             if wl["startDate"] == target_day:
                 pending_resolution.append((acc, wl))
