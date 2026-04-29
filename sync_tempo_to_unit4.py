@@ -24,12 +24,10 @@ from pathlib import Path
 import requests
 
 from clients import JiraClient, TempoClient, ACCOUNT_FIELD, ApiError
-from models import TempoWorklog
+from models import TempoWorklog, Unit4Entry
 from patterns import Patterns
 from unit4_browser import Unit4Browser
 from utils import (
-    get_current_week,
-    get_week_dates,
     load_config_safe,
     load_mapping,
     save_mapping,
@@ -54,10 +52,9 @@ class TrackingLog:
         except Exception as e:
             print(f"[!] tracking log write failed: {e}")
 
-    def open_block(self, mode: str, week: str, day: str | None) -> None:
+    def open_block(self, week: str, day: str) -> None:
         ts = datetime.now().isoformat(timespec="seconds")
-        day_str = day or "all"
-        self._append(f"\n=== {ts} mode={mode} week={week} day={day_str} ===\n")
+        self._append(f"\n=== {ts} week={week} day={day} ===\n")
 
     def log_delete(self, wl_id: int | None, ticket: str) -> None:
         if wl_id is None:
@@ -291,122 +288,14 @@ def ask_for_arbauft(worklog: TempoWorklog, mapping: dict) -> str | None:
     return arbauft
 
 
-async def sync_semi_auto(week: str, valid_worklogs: list, config: dict):
-    """Semi-automatic flow: per worklog, fill non-hours fields, then wait
-    for user to enter hours and click OK in the browser."""
-    print()
-    print("=" * 70)
-    print(f"SEMI-AUTO SYNC | Week {week} | {len(valid_worklogs)} entries")
-    print("=" * 70)
-    print()
-    print("Ablauf pro Eintrag:")
-    print("  1. Skript zeigt Details")
-    print("  2. DU klickst im Browser: Ergänzen + Zoom auf der neuen Zeile")
-    print("  3. ENTER in der Shell → Skript füllt ArbAuft/Text/Ticketno")
-    print("  4. DU wählst Aktivität (TEMPO), trägst Stunden ein, klickst OK")
-    print("  5. ENTER in der Shell → nächster Eintrag")
-    print()
-    print("Steuerung: [ENTER]=weiter, s=skip, q=quit")
-    print()
-
-    async with Unit4Browser(config) as unit4:
-        await unit4.navigate_to_zeiterfassung()
-        if not await unit4.set_week(week):
-            await asyncio.sleep(2)
-            await unit4.set_week(week)
-        if not await unit4.wait_for_ready():
-            print("[!] Woche ist nicht editierbar (eingereicht?). Abbruch.")
-            return
-
-        sorted_wls = sorted(valid_worklogs, key=lambda w: (w.date, w.issue_key))
-        total = len(sorted_wls)
-        done = 0
-        skipped = 0
-
-        for idx, wl in enumerate(sorted_wls, 1):
-            description = (wl.description or wl.issue_summary or "").strip()
-            text_preview = f"[WL:{wl.worklog_id}] {description[:60]}"
-            print(f"[{idx}/{total}] {wl.issue_key} | {wl.hours:.2f}h | {wl.date}")
-            print(f"        ArbAuft : {wl.arbauft}")
-            print(f"        Aktivität: TEMPO")
-            print(f"        Text    : {text_preview}")
-
-            choice = (await asyncio.get_event_loop().run_in_executor(
-                None, lambda: input("        > Ergänzen+Zoom im Browser, dann [ENTER]=fill, s=skip, q=quit: ")
-            )).strip().lower()
-            if choice == "q":
-                print("        Abbruch durch User.")
-                break
-            if choice == "s":
-                print("        übersprungen.")
-                skipped += 1
-                print()
-                continue
-
-            print("        Skript füllt Dialog-Felder...", flush=True)
-            result = await unit4.fill_open_dialog(wl)
-
-            def mark(ok) -> str:
-                if ok is None:
-                    return "MANUELL"
-                return "OK  " if ok else "FAIL"
-
-            print(f"          ArbAuft  : {mark(result['arbauft'])}")
-            print(f"          Aktivität: {mark(result['aktivitaet'])}  (PRÜFEN: TEMPO, ggf. korrigieren)")
-            print(f"          Text     : {mark(result['text'])}")
-            print(f"          Ticketno : {mark(result['ticketno'])}")
-            print(f"          Stunden  : {mark(result['hours'])}  (PRÜFEN im Browser!)")
-
-            if not result["dialog_open"]:
-                print("        [!] Dialog konnte nicht geöffnet werden. Bitte manuell anlegen.")
-                input("        > ENTER wenn Eintrag manuell fertig ist: ")
-                done += 1
-                print()
-                continue
-
-            failed_fields = [k for k in ("arbauft", "text", "ticketno", "hours") if not result[k]]
-            if failed_fields:
-                print(f"        [!] BITTE NACHTRAGEN: {', '.join(failed_fields)}")
-            print(f"        >>> Im Browser prüfen, ggf. korrigieren, OK klicken")
-            input("        > ENTER wenn Dialog im Browser geschlossen: ")
-            done += 1
-            print()
-
-        print()
-        print("=" * 50)
-        print("SEMI-AUTO SUMMARY")
-        print("=" * 50)
-        print(f"  Bearbeitet: {done}")
-        print(f"  Skipped:    {skipped}")
-        print(f"  Verbleibend: {total - done - skipped}")
-        print()
-        print("=" * 60)
-        print(">>> WICHTIG: SAVE/SPEICHERN im Browser klicken!")
-        print(">>> Ohne Save sind ALLE Einträge weg sobald der Browser schließt.")
-        print("=" * 60)
-        loop = asyncio.get_event_loop()
-        while True:
-            try:
-                answer = (await loop.run_in_executor(
-                    None, lambda: input("    >>> Hast du SAVE geklickt? [j=ja, schließen / n=nein, warten]: ")
-                )).strip().lower()
-            except EOFError:
-                await asyncio.sleep(5)
-                continue
-            if answer in ("j", "ja", "y", "yes"):
-                print("    OK — Browser wird geschlossen.")
-                break
-            print("    Browser bleibt offen. Klick SAVE, dann nochmal abfragen.")
-
-
-async def sync(week: str, cutover: str | None, execute: bool, end: str | None = None, limit: int | None = None, days: list[str] | None = None):
-    """Main sync function."""
+async def sync(week: str, target_day: str, execute: bool):
+    """Single-day Tempo→Unit4 sync. ISO week is derived from target_day."""
     dry_run = not execute
-    mode = "EXECUTE" if execute else "DRY-RUN"
+    mode_label = "EXECUTE" if execute else "DRY-RUN"
 
     print()
     print("=" * 70)
-    print(f"SYNC TEMPO -> UNIT4 | Week {week} | Mode: {mode}")
+    print(f"SYNC TEMPO -> UNIT4 | Day {target_day} (week {week}) | Mode: {mode_label}")
     print("=" * 70)
     print()
 
@@ -422,27 +311,16 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
         return
     print(f"[*] Loaded mapping with {len(mapping)} accounts")
 
-    # Get week dates
-    date_from, date_to = get_week_dates(week)
-    print(f"[*] Week {week}: {date_from} to {date_to}")
-
-    if cutover:
-        date_from = cutover
-        print(f"[*] Cutover start: {date_from}")
-    if end:
-        date_to = end
-        print(f"[*] Extended end: {date_to}")
-
-    # Fetch Tempo worklogs
+    # Fetch Tempo worklogs for exactly this day
     print()
-    print(f"[1] Fetching Tempo worklogs ({date_from} to {date_to})...")
+    print(f"[1] Fetching Tempo worklogs for {target_day}...")
 
     try:
         jira = JiraClient(config)
         tempo = TempoClient(config)
 
         account_id = jira.get_my_account_id()
-        raw_worklogs = tempo.fetch_worklogs(account_id, date_from, date_to)
+        raw_worklogs = tempo.fetch_worklogs(account_id, target_day, target_day)
     except ApiError as e:
         print()
         print(f"[!] API Error: {e}")
@@ -471,18 +349,6 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
             else:
                 skipped_count += 1
 
-    # Filter to specific days if requested
-    if days:
-        day_set = set(days)
-        before = len(valid_worklogs)
-        valid_worklogs = [w for w in valid_worklogs if w.date in day_set]
-        print(f"[!] --day filter: {len(valid_worklogs)}/{before} entries match {sorted(day_set)}")
-
-    # Apply limit (for testing with first N entries)
-    if limit is not None and len(valid_worklogs) > limit:
-        valid_worklogs = sorted(valid_worklogs, key=lambda x: (x.date, x.issue_key))[:limit]
-        print(f"[!] --limit {limit}: only first {limit} entries will be synced")
-
     # Show summary
     print()
     print("[3] Summary of worklogs to sync:")
@@ -500,8 +366,6 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
         print("[*] No worklogs to sync. Done.")
         return
 
-    target_day = days[0] if days else None
-    mode = "day-auto" if target_day else "week-bulk"
     tracking = TrackingLog()
 
     # Connect to Unit4
@@ -543,20 +407,19 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
         print("OK")
 
         existing_entries = await unit4.extract_entries(debug=True)
-        print(f"    Found {len(existing_entries)} synced entries")
+        print(f"    Found {len(existing_entries)} synced entries (whole week)")
 
-        # In per-day mode, only delete entries whose worklog_id belongs to the
-        # target day's Tempo worklogs. Markers from other days stay untouched.
-        if target_day:
-            target_wl_ids = {wl.worklog_id for wl in valid_worklogs}
-            before = len(existing_entries)
-            existing_entries = [
-                e for e in existing_entries if e.worklog_id in target_wl_ids
-            ]
-            print(
-                f"    [day-auto] Filtered existing entries by target day: "
-                f"{len(existing_entries)}/{before} match worklog ids of {target_day}"
-            )
+        # Only delete entries whose worklog_id belongs to the target day's
+        # Tempo worklogs. Markers from other days stay untouched.
+        target_wl_ids = {wl.worklog_id for wl in valid_worklogs}
+        before = len(existing_entries)
+        existing_entries = [
+            e for e in existing_entries if e.worklog_id in target_wl_ids
+        ]
+        print(
+            f"    Filtered to target day {target_day}: "
+            f"{len(existing_entries)}/{before} match"
+        )
 
         print()
         print("[6] Status:")
@@ -576,7 +439,7 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
             print()
             print("Run with --execute to apply changes.")
         else:
-            tracking.open_block(mode=mode, week=week, day=target_day)
+            tracking.open_block(week=week, day=target_day)
 
             # Delete existing entries
             if existing_entries:
@@ -591,23 +454,20 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
                 await unit4.delete_entries(existing_entries)
 
                 # Re-scan and repeat if needed
+                remaining: list[Unit4Entry] = []
                 for delete_pass in range(3):
                     print()
                     print(f"    Re-scanning (pass {delete_pass + 1})...")
                     await asyncio.sleep(2)
-                    remaining = await unit4.extract_entries()
+                    remaining_all = await unit4.extract_entries()
+                    # The rescan returns the whole week — filter to our target
+                    # day's worklog ids before deciding whether more deletes
+                    # are needed.
+                    remaining = [r for r in remaining_all if r.worklog_id in target_wl_ids]
                     if not remaining:
-                        print("    All [WL:] entries deleted successfully")
+                        print("    All target-day [WL:] entries deleted")
                         break
-                    # In day-auto, the rescan returns the whole week — filter
-                    # again so we only retry our target day's worklogs.
-                    if target_day:
-                        target_wl_ids = {wl.worklog_id for wl in valid_worklogs}
-                        remaining = [r for r in remaining if r.worklog_id in target_wl_ids]
-                        if not remaining:
-                            print("    All target-day [WL:] entries deleted")
-                            break
-                    print(f"    {len(remaining)} [WL:] entries still exist, deleting again...")
+                    print(f"    {len(remaining)} target-day [WL:] entries still exist, deleting again...")
                     await unit4.delete_entries(remaining)
 
                 # Log what actually disappeared
@@ -706,44 +566,48 @@ async def sync(week: str, cutover: str | None, execute: bool, end: str | None = 
     print("[*] Done.")
 
 
+def week_from_date(date_str: str) -> str:
+    """Derive ISO week (YYYYWW) from a YYYY-MM-DD date.
+
+    ISO weeks are unambiguous: every date belongs to exactly one ISO week.
+    Sat and Mon of the same calendar week land in the same ISO week, Mon
+    of the following week is the next.
+    """
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    year, week_num, _ = d.isocalendar()
+    return f"{year:04d}{week_num:02d}"
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Sync Tempo worklogs to Unit4",
+        description="Sync Tempo worklogs to Unit4 (one day per invocation)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
     # Check connectivity first
     python sync_tempo_to_unit4.py --check
 
-    # Dry-run (default) - shows what would happen
-    python sync_tempo_to_unit4.py 202605
+    # Dry-run for a specific day
+    python sync_tempo_to_unit4.py --day 2026-04-29
 
-    # Execute - actually creates entries
-    python sync_tempo_to_unit4.py 202605 --execute
+    # Execute - sync this single day
+    python sync_tempo_to_unit4.py --day 2026-04-29 --execute
 
-    # With cutover date (only sync from this date onwards)
-    python sync_tempo_to_unit4.py 202605 --cutover 2026-01-29 --execute
+    # No --day = today (dry-run)
+    python sync_tempo_to_unit4.py
         """,
     )
 
     parser.add_argument(
-        "week", nargs="?", default=None, help="Week to sync (YYYYWW), default: current week"
+        "--day",
+        metavar="YYYY-MM-DD",
+        help="Date to sync. Defaults to today. Pass exactly one date.",
     )
     parser.add_argument(
         "--execute", action="store_true", help="Actually execute changes (default: dry-run)"
     )
-    parser.add_argument("--cutover", help="Only sync from this date onwards (YYYY-MM-DD)")
-    parser.add_argument("--end", help="Extend week end date to this date (YYYY-MM-DD)")
     parser.add_argument(
         "--check", action="store_true", help="Check connectivity to all services and exit"
-    )
-    parser.add_argument("--limit", type=int, help="Only sync the first N entries (for testing)")
-    parser.add_argument(
-        "--day",
-        action="append",
-        metavar="YYYY-MM-DD",
-        help="Sync only worklogs on this date. With --execute: fully automatic single-day sync. "
-        "Without --execute: dry-run preview. Pass at most one --day per invocation.",
     )
 
     args = parser.parse_args()
@@ -758,28 +622,22 @@ Examples:
         success = check_connectivity(config)
         return 0 if success else 1
 
-    week = args.week or get_current_week()
+    # Resolve target day: --day, or today
+    target_day = args.day or datetime.now().strftime("%Y-%m-%d")
 
-    # Validate week format
-    if not Patterns.WEEK_FORMAT.match(week):
-        print(f"Error: Invalid week format '{week}'. Expected YYYYWW (e.g., 202605)")
+    # Validate day format
+    if not Patterns.DATE_FORMAT.match(target_day):
+        print(f"Error: Invalid date format '{target_day}'. Expected YYYY-MM-DD")
         return 1
 
-    # Validate cutover format
-    if args.cutover and not Patterns.DATE_FORMAT.match(args.cutover):
-        print(f"Error: Invalid cutover format '{args.cutover}'. Expected YYYY-MM-DD")
+    # Derive ISO week from the day
+    try:
+        week = week_from_date(target_day)
+    except ValueError as e:
+        print(f"Error: cannot parse date '{target_day}': {e}")
         return 1
 
-    # Per-day mode is single-day only — multi-day in one invocation is no
-    # longer supported (atomicity guarantees per call only).
-    if args.day and len(args.day) > 1:
-        print(
-            f"Error: pass at most one --day per invocation (got {len(args.day)}). "
-            "Run the script once per day."
-        )
-        return 1
-
-    asyncio.run(sync(week, args.cutover, args.execute, args.end, args.limit, args.day))
+    asyncio.run(sync(week, target_day, args.execute))
     return 0
 
 

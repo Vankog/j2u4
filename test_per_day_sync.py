@@ -1,11 +1,11 @@
-"""Offline tests for per-day sync filtering and tracking-log writes."""
+"""Offline tests for per-day sync filtering, tracking-log writes, and ISO-week derivation."""
 
 from pathlib import Path
 
 import pytest
 
 from models import TempoWorklog, Unit4Entry
-from sync_tempo_to_unit4 import TrackingLog
+from sync_tempo_to_unit4 import TrackingLog, week_from_date
 
 
 def _wl(wid: int, date: str = "2026-04-27") -> TempoWorklog:
@@ -33,7 +33,7 @@ def _entry(wid: int) -> Unit4Entry:
 
 
 def test_existing_entries_filter_keeps_only_target_day_ids():
-    """The filter that runs after extract_entries() in day-auto mode."""
+    """The filter that runs after extract_entries() in per-day mode."""
     valid_worklogs = [_wl(101, "2026-04-27"), _wl(102, "2026-04-27")]
     existing = [_entry(101), _entry(102), _entry(900), _entry(901)]
 
@@ -49,14 +49,13 @@ def test_existing_entries_filter_keeps_only_target_day_ids():
 def test_tracking_log_writes_block(tmp_path: Path):
     log = TrackingLog(path=str(tmp_path / "sync_history.log"))
 
-    log.open_block(mode="day-auto", week="202618", day="2026-04-27")
+    log.open_block(week="202618", day="2026-04-27")
     log.log_delete(101, "PROJ-1")
     log.log_create(_wl(101))
     log.log_create(_wl(102))
     log.close_block(save_status="ok")
 
     content = (tmp_path / "sync_history.log").read_text()
-    assert "mode=day-auto" in content
     assert "week=202618" in content
     assert "day=2026-04-27" in content
     assert "DELETE [WL:101] PROJ-1" in content
@@ -67,7 +66,7 @@ def test_tracking_log_writes_block(tmp_path: Path):
 
 def test_tracking_log_capture_ref(tmp_path: Path):
     log = TrackingLog(path=str(tmp_path / "sync_history.log"))
-    log.open_block(mode="day-auto", week="202618", day="2026-04-27")
+    log.open_block(week="202618", day="2026-04-27")
     log.close_block(save_status="fail", capture_ref="captures/RUN_test")
 
     content = (tmp_path / "sync_history.log").read_text()
@@ -76,9 +75,9 @@ def test_tracking_log_capture_ref(tmp_path: Path):
 
 def test_tracking_log_appends_across_blocks(tmp_path: Path):
     log = TrackingLog(path=str(tmp_path / "sync_history.log"))
-    log.open_block("day-auto", "202618", "2026-04-27")
+    log.open_block("202618", "2026-04-27")
     log.close_block("ok")
-    log.open_block("day-auto", "202618", "2026-04-28")
+    log.open_block("202618", "2026-04-28")
     log.close_block("ok")
 
     content = (tmp_path / "sync_history.log").read_text()
@@ -91,7 +90,27 @@ def test_tracking_log_write_failure_does_not_raise(tmp_path: Path):
     bad_path = tmp_path / "no" / "such" / "dir" / "sync.log"
     log = TrackingLog(path=str(bad_path))
     # Must not raise
-    log.open_block("day-auto", "202618", "2026-04-27")
+    log.open_block("202618", "2026-04-27")
     log.log_delete(101, "PROJ-1")
     log.log_create(_wl(101))
     log.close_block("ok")
+
+
+def test_week_from_date_iso_unambiguous():
+    """ISO week derivation: same calendar week → same ISO week, even Sat/Sun."""
+    # Mi 29.04.2026 is in ISO week 18
+    assert week_from_date("2026-04-29") == "202618"
+    # Sat of the same week
+    assert week_from_date("2026-05-02") == "202618"
+    # Sun of the same week
+    assert week_from_date("2026-05-03") == "202618"
+    # Mon of next week → ISO week 19
+    assert week_from_date("2026-05-04") == "202619"
+
+
+def test_week_from_date_year_boundary():
+    """ISO weeks at year boundary follow ISO 8601, not calendar year."""
+    # 2025-12-29 is Mon of ISO week 1 of 2026 per ISO 8601
+    assert week_from_date("2025-12-29") == "202601"
+    # 2027-01-01 is Fri — ISO week 53 of 2026
+    assert week_from_date("2027-01-01") == "202653"

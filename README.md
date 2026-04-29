@@ -138,90 +138,63 @@ On first run, Unit4 will prompt for login (2FA). The session is saved to `sessio
 
 This tests Jira, Tempo, and Unit4 connectivity before syncing.
 
-### Sync a single day (recommended)
+### Sync a day
 
 ```bash
-# Dry-run for a specific day
-./sync 202618 --day 2026-04-27
+# Dry-run — shows what would happen for a specific day
+./sync --day 2026-04-29
 
-# Execute - syncs only this day, fully unattended
-./sync 202618 --day 2026-04-27 --execute
+# Execute — syncs this single day, fully unattended
+./sync --day 2026-04-29 --execute
+
+# No --day = today
+./sync                       # dry-run for today
+./sync --execute             # ← error: --day required for --execute
 ```
 
-This is the recommended daily workflow: run the script once at the end of each
-working day, syncing only that day's worklogs. Each invocation is atomic —
-delete-then-recreate covers only the worklogs of the target day, and `save()`
-commits at the end. If the run hangs or fails, only one day is affected; the
-other days of the week are untouched and can be synced in their own runs.
+The script syncs **exactly one day per invocation**. The ISO week is derived
+from the date — Sat and Mon of the same calendar week land in the same ISO
+week, no need to compute it yourself.
 
-The script writes a `sync_history.log` block per invocation so you can see
-exactly which `[WL:]` markers were deleted and created (see
-[Tracking log](#tracking-log) below).
+Each invocation is atomic: the script reads the entire week's `[WL:]`
+markers, but only deletes-and-recreates the ones whose Tempo worklog id
+belongs to the target day. Other days' markers stay untouched. If the run
+hangs or fails, only one day is affected; other days can be re-run in
+their own invocations.
 
-Pass at most **one** `--day` per invocation. Multiple `--day` values are
-rejected with an error — run the script once per day.
+Each `--execute` run appends a block to `./sync_history.log` (gitignored)
+so you can see which markers were deleted and created — see
+[Tracking log](#tracking-log) below.
 
-### Sync a whole week (fallback)
+### What the script does
 
-```bash
-# Dry-run
-./sync 202618
-
-# Execute
-./sync 202618 --execute
-```
-
-The week format is `YYYYWW` (ISO week number), e.g., `202618` = Week 18 of 2026.
-
-The bulk-week mode deletes **all** `[WL:]` markers across the week and recreates
-them. Use this when:
-
-- you want to bulk-sync a backfill,
-- you want to clean up orphaned markers (Tempo worklog deleted but Unit4 entry remains),
-- the per-day mode misses entries due to a worklog being moved between dates in
-  Tempo (see "Known limitation" below).
-
-### Other options
-
-```bash
-# Limit to first N entries (sorted by date, ticket) — useful for testing
-./sync 202605 --limit 3 --execute
-
-# Extend the week's end date (e.g. include weekend bookings)
-./sync 202605 --end 2026-02-08 --execute
-
-# Cutover: only sync from this date onwards within the week
-./sync 202605 --cutover 2026-02-03 --execute
-```
-
-### What the script does (per day)
-
-1. Fetches Tempo worklogs for the week
-2. Filters to the target day (when `--day` is set)
+1. Derives the ISO week from `--day` (e.g. `2026-04-29` → `202618`)
+2. Fetches Tempo worklogs for that single day
 3. Looks up Jira issues to get the Account field
 4. Maps Account → Unit4 ArbAuft code
 5. Opens Unit4 (browser is visible — you can watch)
 6. Reads existing `[WL:]` markers in the current week
-7. In day-auto mode: keeps only the markers whose worklog id belongs to the
-   target day; in week-bulk mode: keeps all of them
+7. Filters them to the target day's worklog ids
 8. **Deletes** these markers
 9. **Creates** fresh entries from Tempo
 10. **Saves**, then writes the result to `sync_history.log`
 
 ### Known limitation: date drift
 
-In per-day mode, deletion is keyed by Tempo worklog id, not by row date in
-Unit4. If a Tempo worklog moved from day A to day B but its `[WL:N]` marker
-still sits on day A in Unit4, the day-auto sync for day A will *not* delete
-it (id N is no longer among day A's worklogs). Workaround: run the bulk-week
-mode once (`./sync YYYYWW --execute`) — it cleans up orphans across the week.
+Deletion is keyed by Tempo worklog id, not by row date in Unit4. If a Tempo
+worklog moved from day A to day B but its `[WL:N]` marker still sits on day
+A in Unit4, the day-A sync will *not* delete it (id N is no longer among
+day A's worklogs). The day-B sync will pick it up wherever it is in the
+visible week and recreate it correctly. Truly orphan markers (Tempo worklog
+deleted) need manual cleanup in Unit4 — there is no bulk-cleanup mode in
+this script.
 
 ### Tracking log
 
 Each `--execute` run appends a block to `./sync_history.log`:
 
 ```
-=== 2026-04-27T18:30:15 mode=day-auto week=202618 day=2026-04-27 ===
+=== 2026-04-27T18:30:15 week=202618 day=2026-04-27 ===
 DELETE [WL:30007] PROJ-16
 CREATE [WL:30007] PROJ-16 0.5h 1018-10175-100
 CREATE [WL:30008] PROJ-127 0.75h 1018-10089-108
@@ -329,13 +302,9 @@ It's the "ArbAuft" field in the entry form.
 |---------|-------------|
 | `./setup.sh` | Initial setup (run once after cloning) |
 | `./sync --check` | Test connectivity to Jira, Tempo, Unit4 |
-| `./sync YYYYWW --day YYYY-MM-DD --execute` | **Recommended**: per-day auto sync, atomic |
-| `./sync YYYYWW --day YYYY-MM-DD` | Dry-run for a specific day |
-| `./sync YYYYWW --execute` | Bulk-week sync (fallback / cleanup) |
-| `./sync YYYYWW` | Dry-run for the whole week |
-| `./sync YYYYWW --cutover YYYY-MM-DD --execute` | Sync from cutover date onwards (week-bulk) |
-| `./sync YYYYWW --end YYYY-MM-DD --execute` | Extend the week's end date (e.g. include weekend) |
-| `./sync YYYYWW --limit N --execute` | Sync only the first N entries (testing) |
+| `./sync --day YYYY-MM-DD --execute` | Sync this single day |
+| `./sync --day YYYY-MM-DD` | Dry-run for that day |
+| `./sync` | Dry-run for today |
 | `./build-mapping` | Build mappings from last 8 weeks |
 | `./build-mapping --weeks N` | Build mappings from last N weeks |
 | `./build-mapping --from YYYYWW --to YYYYWW` | Build mappings from specific range |
@@ -368,19 +337,19 @@ It's the "ArbAuft" field in the entry form.
 - The script will detect this and prompt for re-login
 - If issues persist, delete `session.json` and run again
 
-### Bulk `--execute` gets stuck on a specific day
-The bulk-week flow can hit cascade failures on long runs. Use the
-**per-day mode** as the primary recovery strategy — each call is atomic and
-limited to a single day:
+### A specific day failed
+Each invocation handles exactly one day, so failures are isolated. When a
+day fails:
 
-```bash
-./sync 202618 --day 2026-04-27 --execute
-./sync 202618 --day 2026-04-28 --execute
-```
+1. Check `captures/RUN_*/` — the trace is there.
+2. Check `sync_history.log` — the most recent block records `SAVE fail`
+   with a back-reference to the capture folder.
+3. Open the trace: `uv run playwright show-trace captures/RUN_*/.../trace.zip`
+4. Fix the underlying cause and re-run `./sync --day YYYY-MM-DD --execute`.
 
-If a day fails, the trace appears under `captures/RUN_*/` and the
-`sync_history.log` block records `SAVE fail` with a back-reference. Re-run the
-failing day's command after fixing the underlying cause.
+The re-run will detect the partial state (some `[WL:]` markers from the
+failed run, some missing) and bring the day to consistency by deleting
+and recreating the target day's markers.
 
 ### Unit4 language
 - The browser automation works with both **German** and **English** Unit4 UI
