@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,18 @@ from playwright.async_api import Frame, Page, Request, async_playwright, Browser
 from j2u4.models import TempoWorklog, Unit4Entry
 from j2u4.patterns import Patterns
 from j2u4.utils import session_path
+
+
+def _default_capture_dir() -> Path:
+    """Platform-neutral temp location for failure captures.
+
+    Linux/macOS: /tmp/j2u4-captures (or whatever tempfile.gettempdir() returns)
+    Windows:     %TEMP%\\j2u4-captures (typically C:\\Users\\<user>\\AppData\\Local\\Temp)
+
+    The OS will eventually clean these out — Playwright traces are
+    diagnostic artefacts, not data to keep forever.
+    """
+    return Path(tempfile.gettempdir()) / "j2u4-captures"
 
 TIMEOUT = 10000  # 10 seconds
 DAY_NAMES = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
@@ -103,7 +116,9 @@ class Unit4Browser:
 
         debug_cfg = config.get("debug", {}) or {}
         self._capture_enabled: bool = bool(debug_cfg.get("capture_enabled", True))
-        self._capture_dir: Path = Path(debug_cfg.get("capture_dir", "./captures"))
+        self._capture_dir: Path = Path(
+            debug_cfg.get("capture_dir") or _default_capture_dir()
+        )
         self._capture_cap: int = int(debug_cfg.get("capture_cap", 10))
         self._capture_video: bool = bool(debug_cfg.get("capture_video", True))
         # Diagnostic mode: keep every chunk, not just failures. Set

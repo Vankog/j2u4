@@ -18,7 +18,6 @@
   },
   "debug": {
     "capture_enabled": true,
-    "capture_dir": "./captures",
     "capture_cap": 10,
     "capture_video": true
   }

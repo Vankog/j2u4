@@ -189,7 +189,6 @@ else has sensible defaults — leave it out unless you want to override.
   },
   "debug": {
     "capture_enabled": true,
-    "capture_dir": "./captures",
     "capture_cap": 10,
     "capture_video": true
   }
@@ -207,7 +206,7 @@ else has sensible defaults — leave it out unless you want to override.
 | `unit4.url` | yes | — | The Unit4 ERP entry URL for your tenant |
 | `mapping.help_urls` | optional | `[]` | URLs shown in the interactive prompt when an account cannot be resolved automatically — e.g. your team's Confluence pages listing the workorder catalogue. The list is **read** by the prompt, never hardcoded in the code |
 | `debug.capture_enabled` | optional | `true` | Capture a Playwright trace per failed browser operation (set `--no-capture` on the CLI to override per run) |
-| `debug.capture_dir` | optional | `./captures` | Where capture folders land. cwd-relative on purpose so traces follow the working directory of the run |
+| `debug.capture_dir` | optional | OS temp dir (`/tmp/j2u4-captures` on Linux/macOS, `%TEMP%\j2u4-captures` on Windows) | Where capture folders land. Default points at temp so traces don't pile up in your working directory; the OS cleans them eventually. Override to a stable path if you want to keep traces around |
 | `debug.capture_cap` | optional | `10` | Max trace folders kept per run, prevents disk floods on cascading failures |
 | `debug.capture_video` | optional | `true` | Record a `.webm` of the browser session alongside the trace (`--no-video` to override) |
 
@@ -233,9 +232,11 @@ and `sync_history.log`. Lookup order:
 `./setup.sh` writes the config there on the first run, so `j2u4` works
 from any working directory afterwards.
 
-`captures/` is **not** in this directory — it's created relative to the
-current working directory because trace and video files can grow large.
-Override via `debug.capture_dir`.
+Failure-capture folders go to a **temp directory** by default
+(`/tmp/j2u4-captures` on Linux/macOS, `%TEMP%\j2u4-captures` on Windows)
+so they don't pile up in your working directory and the OS cleans them
+eventually. Override via `debug.capture_dir` if you want them somewhere
+stable.
 
 ### First run (login)
 
@@ -511,10 +512,12 @@ at it so the prompt links there.
 Each invocation handles exactly one day, so failures are isolated. When a
 day fails:
 
-1. Check `captures/RUN_*/` — the trace is there.
+1. Check the captures directory — the trace is there. Default is
+   `/tmp/j2u4-captures/RUN_*/` (Linux/macOS) or `%TEMP%\j2u4-captures\RUN_*\`
+   (Windows); see your `debug.capture_dir` for overrides.
 2. Check `sync_history.log` — the most recent block records `SAVE fail`
-   with a back-reference to the capture folder.
-3. Open the trace: `uv run playwright show-trace captures/RUN_*/.../trace.zip`
+   with a back-reference to the exact capture folder.
+3. Open the trace: `uv run playwright show-trace <path-from-log>/trace.zip`
 4. Fix the underlying cause and re-run `j2u4 --day YYYY-MM-DD --execute`.
 
 The re-run will detect the partial state (some `[WL:]` markers from the
@@ -536,8 +539,12 @@ When something goes wrong during the browser automation (Add button missing, dia
 
 ### Where captures land
 
+By default the captures live under the OS temp directory:
+- Linux/macOS: `/tmp/j2u4-captures/RUN_<ts>/`
+- Windows: `%TEMP%\j2u4-captures\RUN_<ts>\`
+
 ```
-captures/
+<capture_dir>/
 └── RUN_2026-04-28T14-23-05/
     ├── 2026-04-28T14-23-49_CREATE_PROJ-123/
     │   ├── trace.zip       # Playwright trace — open in Trace Viewer
@@ -546,12 +553,14 @@ captures/
     └── *.webm              # browser video for the whole run (if capture_video)
 ```
 
-If the run finishes without any failure, the whole `RUN_*` folder is deleted automatically — no clutter from successful runs.
+If the run finishes without any failure, the whole `RUN_*` folder is deleted automatically — no clutter from successful runs. The OS will eventually clean up leftover folders too.
+
+Override `debug.capture_dir` in `config.json` to keep captures in a stable location.
 
 ### Opening a trace
 
 ```bash
-uv run playwright show-trace captures/RUN_<ts>/<failure-folder>/trace.zip
+uv run playwright show-trace /tmp/j2u4-captures/RUN_<ts>/<failure-folder>/trace.zip
 ```
 
 The Trace Viewer shows every action with before/after DOM snapshots, network and console logs, and a screenshot timeline. This is usually enough to see *exactly* what the browser was doing when the failure happened.
@@ -570,7 +579,7 @@ Set in `config.json`:
 }
 ```
 
-The whole `debug` block is optional; defaults are `capture_enabled: true`, `capture_dir: "./captures"`, `capture_cap: 10`, `capture_video: true`.
+The whole `debug` block is optional. Defaults: `capture_enabled: true`, `capture_dir` = OS temp dir (see [Configuration](#configuration)), `capture_cap: 10`, `capture_video: true`.
 
 ## Testing
 
