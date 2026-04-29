@@ -66,6 +66,11 @@ else
 fi
 
 echo
+# Install as a global tool so `j2u4` is available from anywhere
+echo "[5] Installing j2u4 as a global command via uv..."
+uv tool install --from . j2u4 --reinstall
+
+echo
 echo "========================================"
 echo "Setup complete!"
 echo "========================================"
@@ -78,16 +83,9 @@ if [ "$CONFIG_CREATED" = true ]; then
     echo
 fi
 echo "  2. Test connectivity:"
-echo "     ./sync --check"
+echo "     j2u4 --check"
 echo
-if [ "$MAPPING_CREATED" = true ]; then
-    echo "  3. Build the Account -> ArbAuft mapping (choose one):"
-    echo "     a) Auto-build from Unit4 history (recommended for first setup):"
-    echo "        ./build-mapping"
-    echo "     b) Or enter mappings manually when prompted during sync"
-    echo
-fi
-echo "  4. Sync your time entries:"
-echo "     ./sync 202606              # dry-run first"
-echo "     ./sync 202606 --execute    # actually sync"
+echo "  3. Sync today's time entries:"
+echo "     j2u4 --day \$(date -I)             # dry-run first"
+echo "     j2u4 --day \$(date -I) --execute   # actually sync"
 echo
