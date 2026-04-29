@@ -155,9 +155,28 @@ both in sync.
 
 ## Configuration
 
+### Interactive setup (`j2u4 --init`)
+
+The fastest way to create or refresh `config.json` is the interactive
+prompt:
+
+```bash
+j2u4 --init
+```
+
+It walks through the four sections (Jira / Tempo / Unit4 / mapping
+help URLs), prints the helper URL where each token is created, hides
+input for tokens, and reuses any existing values as defaults — pressing
+ENTER on a token keeps the current one. A summary with masked tokens
+is shown before anything is written; you confirm with `y` to save.
+
+The file lands in the user-config directory by default
+(`~/.config/j2u4/config.json` on Linux/macOS, `%APPDATA%\j2u4\config.json`
+on Windows). Override the location with `$J2U4_CONFIG_DIR`.
+
 ### API tokens
 
-You need two API tokens:
+If you fill in `config.json` by hand instead of `--init`:
 
 - **Jira API Token**: [Create here](https://id.atlassian.com/manage-profile/security/api-tokens)
 - **Tempo API Token**: Go to Tempo > Settings > API Integration
@@ -501,6 +520,7 @@ at it so the prompt links there.
 | `j2u4 ... --no-capture` | Disable failure-capture for this run (override config) |
 | `j2u4 ... --no-video` | Disable video recording for this run (override config) |
 | `j2u4 ... --slow N` | Scale Playwright slow_mo + click/wait timeouts by N (use 2/4/6 for slow Unit4) |
+| `j2u4 --init` | Interactive setup of config.json (helper links + hidden token input) |
 
 ## Troubleshooting
 

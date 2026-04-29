@@ -11,8 +11,10 @@ Usage (after `uv tool install --from . j2u4`):
 
 import argparse
 import asyncio
+import json
 import sys
 from datetime import datetime
+from getpass import getpass
 from pathlib import Path
 
 import requests
@@ -22,11 +24,169 @@ from j2u4.clients import ApiError, JiraClient, TempoClient
 from j2u4.models import TempoWorklog, Unit4Entry
 from j2u4.patterns import Patterns
 from j2u4.utils import (
+    config_path,
     get_week_dates,
     load_config_safe,
     load_mapping,
     save_mapping,
+    user_config_dir,
 )
+
+
+# ---------------------------------------------------------------------------
+# Interactive `--init` setup (budjira-style: prompts + helper links)
+# ---------------------------------------------------------------------------
+
+
+def _ask(label: str, default: str | None = None, validate=None) -> str:
+    """Prompt for a value, accept default with empty input, repeat on invalid."""
+    while True:
+        prompt = label
+        if default:
+            prompt += f" [{default}]"
+        prompt += ": "
+        value = input(prompt).strip() or (default or "")
+        if not value:
+            print("    (required, try again)")
+            continue
+        if validate is not None:
+            err = validate(value)
+            if err:
+                print(f"    {err}")
+                continue
+        return value
+
+
+def _ask_secret(label: str, existing: str | None = None) -> str:
+    """Prompt for a token; input is hidden. If a value already exists,
+    pressing ENTER keeps it."""
+    suffix = " [keep existing]" if existing else ""
+    while True:
+        value = getpass(f"{label}{suffix}: ").strip()
+        if not value and existing:
+            return existing
+        if not value:
+            print("    (required, try again)")
+            continue
+        return value
+
+
+def _validate_url(value: str) -> str | None:
+    if not value.startswith(("http://", "https://")):
+        return "URL must start with http:// or https://"
+    return None
+
+
+def interactive_init() -> int:
+    """Walk the user through creating ~/.config/j2u4/config.json (or wherever
+    j2u4 looks for its config). Loads existing values as defaults; tokens
+    are prompted with hidden input and pressing ENTER keeps the current
+    value."""
+    target = config_path()
+    existing: dict = {}
+    if target.exists():
+        try:
+            existing = json.loads(target.read_text())
+            print(f"[*] Found existing {target} — current values are offered as defaults.")
+        except json.JSONDecodeError:
+            print(f"[!] Existing {target} is not valid JSON; ignoring it.")
+
+    print()
+    print("=" * 60)
+    print("j2u4 — interactive configuration")
+    print("=" * 60)
+    print()
+    print("Three required sections (Jira / Tempo / Unit4) plus optional")
+    print("Confluence help URLs for the mapping prompt. Press Ctrl-C to abort.")
+    print()
+
+    # ---- Jira ----
+    print("[1/4] Jira (Atlassian Cloud)")
+    print("      Create an API token at:")
+    print("        https://id.atlassian.com/manage-profile/security/api-tokens")
+    print()
+    jira = existing.get("jira") or {}
+    jira_url = _ask(
+        "  Jira base URL (e.g. https://acme.atlassian.net)",
+        jira.get("base_url"),
+        _validate_url,
+    )
+    jira_email = _ask("  Your Atlassian email", jira.get("user_email"))
+    jira_token = _ask_secret("  Jira API token (input hidden)", jira.get("api_token"))
+
+    # ---- Tempo ----
+    print()
+    print("[2/4] Tempo Timesheets")
+    print("      Create a token at:")
+    print(f"        {jira_url.rstrip('/')}/plugins/servlet/ac/io.tempo.jira/tempo-app#!/configuration/api-integration")
+    print()
+    tempo_token = _ask_secret(
+        "  Tempo API token (input hidden)", (existing.get("tempo") or {}).get("api_token")
+    )
+
+    # ---- Unit4 ----
+    print()
+    print("[3/4] Unit4 ERP")
+    print("      URL pattern: https://ubw.unit4cloud.com/<TENANT>/Default.aspx")
+    print()
+    unit4_url = _ask(
+        "  Unit4 URL", (existing.get("unit4") or {}).get("url"), _validate_url
+    )
+
+    # ---- Mapping help URLs (optional) ----
+    print()
+    print("[4/4] Mapping help URLs (optional)")
+    print("      Shown in the prompt when an account can't be auto-resolved.")
+    print("      Typically your team's Confluence pages with the workorder catalogue.")
+    print("      Enter one URL per line, empty line to finish.")
+    print()
+    help_urls: list[str] = list((existing.get("mapping") or {}).get("help_urls") or [])
+    if help_urls:
+        print("      Existing URLs (will be kept; add more or hit ENTER to skip):")
+        for u in help_urls:
+            print(f"        - {u}")
+    while True:
+        u = input("    URL (empty to finish): ").strip()
+        if not u:
+            break
+        if _validate_url(u):
+            print(f"    {_validate_url(u)}")
+            continue
+        help_urls.append(u)
+        print(f"      Added. ({len(help_urls)} total)")
+
+    # ---- Build + show summary ----
+    config: dict = {
+        "jira": {"base_url": jira_url, "user_email": jira_email, "api_token": jira_token},
+        "tempo": {"api_token": tempo_token},
+        "unit4": {"url": unit4_url},
+    }
+    if help_urls:
+        config["mapping"] = {"help_urls": help_urls}
+    # Preserve any existing debug block — not part of the interactive flow
+    if existing.get("debug"):
+        config["debug"] = existing["debug"]
+
+    print()
+    print("=" * 60)
+    print("Summary (tokens masked):")
+    print("=" * 60)
+    masked = json.loads(json.dumps(config))  # deep copy
+    masked["jira"]["api_token"] = "*" * 8
+    masked["tempo"]["api_token"] = "*" * 8
+    print(json.dumps(masked, indent=2, ensure_ascii=False))
+    print()
+    confirm = input(f"Write to {target}? [y/N]: ").strip().lower()
+    if confirm not in ("y", "yes", "j", "ja"):
+        print("[*] Aborted, nothing written.")
+        return 1
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n")
+    print(f"[*] Wrote {target}")
+    print()
+    print("Verify with: j2u4 --check")
+    return 0
 
 
 class TrackingLog:
@@ -714,6 +874,13 @@ Examples:
         "--check", action="store_true", help="Check connectivity to all services and exit"
     )
     parser.add_argument(
+        "--init",
+        action="store_true",
+        help="Interactive setup: walk through config.json fields with prompts and "
+        "helper links (Atlassian token page, Tempo token page). Loads existing "
+        "values as defaults if config.json already exists.",
+    )
+    parser.add_argument(
         "--capture",
         dest="capture",
         default=None,
@@ -741,6 +908,11 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    # --init runs before config-load: it's how you create the config in
+    # the first place, and it tolerates a missing/invalid existing file.
+    if args.init:
+        return interactive_init()
 
     # Load config first (needed for --check and sync)
     config = load_config_safe()
