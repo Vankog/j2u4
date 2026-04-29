@@ -1,6 +1,6 @@
 """Offline tests for the mapping resolver pipeline."""
 
-from mapping_resolver import resolve, find_workorders_in_text
+from j2u4.mapping_resolver import find_workorders_in_text, resolve
 
 
 def test_workorder_in_name_resolves_directly():

@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from models import TempoWorklog
-from unit4_browser import Unit4Browser
+from j2u4.browser import Unit4Browser
+from j2u4.models import TempoWorklog
 
 
 def _make_browser(tmp_path, capture_cap: int = 10):

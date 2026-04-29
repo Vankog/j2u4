@@ -13,9 +13,9 @@ from pathlib import Path
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Frame, Page, Request, async_playwright, BrowserContext
 
-from models import TempoWorklog, Unit4Entry
-from patterns import Patterns
-from utils import SESSION_FILE
+from j2u4.models import TempoWorklog, Unit4Entry
+from j2u4.patterns import Patterns
+from j2u4.utils import SESSION_FILE
 
 TIMEOUT = 10000  # 10 seconds
 DAY_NAMES = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]

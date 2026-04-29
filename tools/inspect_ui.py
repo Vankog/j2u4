@@ -14,7 +14,7 @@ import json
 import os
 from playwright.async_api import async_playwright, Frame
 
-from utils import load_config_safe, SESSION_FILE
+from j2u4.utils import SESSION_FILE, load_config_safe
 
 ELEMENTS_TO_INSPECT = [
     {

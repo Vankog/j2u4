@@ -8,8 +8,8 @@ Does NOT save anything. Browser stays open after the dump for visual
 verification.
 """
 import asyncio
-from utils import load_config_safe
-from unit4_browser import Unit4Browser
+from j2u4.browser import Unit4Browser
+from j2u4.utils import load_config_safe
 
 
 async def main():

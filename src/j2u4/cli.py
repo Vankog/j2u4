@@ -23,11 +23,11 @@ from pathlib import Path
 
 import requests
 
-from clients import JiraClient, TempoClient, ApiError
-from models import TempoWorklog, Unit4Entry
-from patterns import Patterns
-from unit4_browser import Unit4Browser
-from utils import (
+from j2u4.browser import Unit4Browser
+from j2u4.clients import ApiError, JiraClient, TempoClient
+from j2u4.models import TempoWorklog, Unit4Entry
+from j2u4.patterns import Patterns
+from j2u4.utils import (
     get_week_dates,
     load_config_safe,
     load_mapping,
@@ -192,7 +192,7 @@ def fetch_and_resolve_worklogs(
         - week_worklog_ids: ALL worklog ids found across the whole week
           (used for orphan detection)
     """
-    from mapping_resolver import resolve as resolve_arbauft
+    from j2u4.mapping_resolver import resolve as resolve_arbauft
 
     tempo = TempoClient(config)
     jira = JiraClient(config)

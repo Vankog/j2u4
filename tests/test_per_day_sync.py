@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from models import TempoWorklog, Unit4Entry
-from sync_tempo_to_unit4 import TrackingLog, week_from_date
+from j2u4.cli import TrackingLog, week_from_date
+from j2u4.models import TempoWorklog, Unit4Entry
 
 
 def _wl(wid: int, date: str = "2026-04-27") -> TempoWorklog:
