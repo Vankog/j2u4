@@ -3,21 +3,69 @@
 import asyncio
 import json
 import os
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Callable, TypeVar
 
 T = TypeVar("T")
 
-# File paths
-SESSION_FILE = "session.json"
-CONFIG_FILE = "config.json"
-MAPPING_FILE = "mapping.json"
-LEGACY_MAPPING_FILE = "account_to_arbauft_mapping.json"
+# Filenames (resolved relative to a directory chosen at runtime)
+SESSION_FILENAME = "session.json"
+CONFIG_FILENAME = "config.json"
+MAPPING_FILENAME = "mapping.json"
+LEGACY_MAPPING_FILENAME = "account_to_arbauft_mapping.json"
+
+
+def user_config_dir() -> Path:
+    """Return the j2u4 user-config directory using OS conventions.
+
+    Linux / macOS: $XDG_CONFIG_HOME/j2u4 (default ~/.config/j2u4)
+    Windows:       %APPDATA%/j2u4
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / "j2u4"
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "j2u4"
+
+
+def _resolve_dir() -> Path:
+    """Pick the directory to search for config / mapping / session.
+
+    Order:
+      1. J2U4_CONFIG_DIR environment variable (explicit override)
+      2. Current working directory, if it already contains config.json
+         (preserves repo-style invocations: `cd repo && j2u4 …`)
+      3. user_config_dir() — the OS-conventional location for installed CLI
+    """
+    env = os.environ.get("J2U4_CONFIG_DIR")
+    if env:
+        return Path(env).expanduser()
+    if Path(CONFIG_FILENAME).exists():
+        return Path(".")
+    return user_config_dir()
+
+
+def config_path() -> Path:
+    return _resolve_dir() / CONFIG_FILENAME
+
+
+def mapping_path() -> Path:
+    return _resolve_dir() / MAPPING_FILENAME
+
+
+def legacy_mapping_path() -> Path:
+    return _resolve_dir() / LEGACY_MAPPING_FILENAME
+
+
+def session_path() -> Path:
+    return _resolve_dir() / SESSION_FILENAME
 
 
 def load_config() -> dict:
     """Load config.json with Jira and Tempo credentials."""
-    with open(CONFIG_FILE) as f:
+    with open(config_path()) as f:
         return json.load(f)
 
 
@@ -59,12 +107,19 @@ def load_config_safe() -> dict | None:
     Returns:
         Config dict if valid, None if errors occurred.
     """
-    if not os.path.exists(CONFIG_FILE):
-        print("[!] ERROR: config.json not found!")
+    cfg = config_path()
+    if not cfg.exists():
+        print(f"[!] ERROR: config.json not found at {cfg}")
         print()
-        print("    Create config.json based on config.example.json:")
-        print("    $ cp config.example.json config.json")
-        print("    $ nano config.json  # Fill in your credentials")
+        print("    j2u4 looked in this order:")
+        print("      1. $J2U4_CONFIG_DIR (if set)")
+        print("      2. ./config.json in the current directory")
+        print(f"      3. {user_config_dir()}/config.json")
+        print()
+        print("    Create one of these from the template, e.g.:")
+        print(f"      mkdir -p {user_config_dir()}")
+        print(f"      cp config.example.json {user_config_dir()}/config.json")
+        print(f"      $EDITOR {user_config_dir()}/config.json")
         print()
         return None
 
@@ -96,26 +151,30 @@ def load_mapping() -> dict:
     does not, rename it. After the next save_mapping(), only the new
     name persists.
     """
-    if not os.path.exists(MAPPING_FILE) and os.path.exists(LEGACY_MAPPING_FILE):
+    mp = mapping_path()
+    legacy = legacy_mapping_path()
+    if not mp.exists() and legacy.exists():
         try:
-            os.rename(LEGACY_MAPPING_FILE, MAPPING_FILE)
-            print(f"[*] Renamed legacy {LEGACY_MAPPING_FILE} -> {MAPPING_FILE}")
+            legacy.rename(mp)
+            print(f"[*] Renamed legacy {legacy} -> {mp}")
         except OSError as e:
             # If rename fails (permissions, cross-device, etc.), fall through
             # and read from the legacy path so the run can still proceed.
             print(f"[!] Could not rename legacy mapping file: {e}")
-            with open(LEGACY_MAPPING_FILE) as f:
+            with open(legacy) as f:
                 return json.load(f)
 
-    if os.path.exists(MAPPING_FILE):
-        with open(MAPPING_FILE) as f:
+    if mp.exists():
+        with open(mp) as f:
             return json.load(f)
     return {}
 
 
 def save_mapping(mapping: dict) -> None:
     """Save account-to-arbauft mapping."""
-    with open(MAPPING_FILE, "w") as f:
+    mp = mapping_path()
+    mp.parent.mkdir(parents=True, exist_ok=True)
+    with open(mp, "w") as f:
         json.dump(mapping, f, indent=2, ensure_ascii=False)
 
 

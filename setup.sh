@@ -81,35 +81,61 @@ uv run playwright install chromium
 # Bootstrap-only steps: config and mapping files. Skipped on --upgrade
 # because we assume those are already present and edited.
 if [ "$MODE" = "install" ]; then
+    # Decide where config + mapping live. Priority:
+    #   1. $J2U4_CONFIG_DIR (explicit override)
+    #   2. ./config.json in cwd (Repo-style, unchanged)
+    #   3. user config dir: ~/.config/j2u4 (Linux/macOS) or %APPDATA%/j2u4
+    if [ -n "$J2U4_CONFIG_DIR" ]; then
+        TARGET_DIR="$J2U4_CONFIG_DIR"
+    elif [ -f "config.json" ]; then
+        TARGET_DIR="."
+    else
+        # Default to OS user-config dir; XDG-friendly on Linux/macOS.
+        TARGET_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/j2u4"
+    fi
+    mkdir -p "$TARGET_DIR"
+
     # Create config from template if needed
-    if [ ! -f "config.json" ]; then
+    if [ ! -f "$TARGET_DIR/config.json" ]; then
         if [ -f "config.example.json" ]; then
-            echo "[3] Creating config.json from template..."
-            cp config.example.json config.json
+            echo "[3] Creating $TARGET_DIR/config.json from template..."
+            cp config.example.json "$TARGET_DIR/config.json"
             CONFIG_CREATED=true
+            CONFIG_PATH="$TARGET_DIR/config.json"
         else
             echo "[3] No config.example.json found, skipping config creation"
             CONFIG_CREATED=false
+            CONFIG_PATH=""
         fi
     else
-        echo "[3] config.json already exists"
+        echo "[3] config.json already exists at $TARGET_DIR/"
         CONFIG_CREATED=false
+        CONFIG_PATH="$TARGET_DIR/config.json"
     fi
 
-    # Migrate legacy mapping filename if needed
-    if [ ! -f "mapping.json" ] && [ -f "account_to_arbauft_mapping.json" ]; then
-        echo "[4] Renaming legacy account_to_arbauft_mapping.json -> mapping.json"
-        mv account_to_arbauft_mapping.json mapping.json
+    # Migrate legacy mapping filename if needed (in TARGET_DIR)
+    if [ ! -f "$TARGET_DIR/mapping.json" ] && [ -f "$TARGET_DIR/account_to_arbauft_mapping.json" ]; then
+        echo "[4] Renaming legacy account_to_arbauft_mapping.json -> mapping.json (in $TARGET_DIR)"
+        mv "$TARGET_DIR/account_to_arbauft_mapping.json" "$TARGET_DIR/mapping.json"
+    fi
+    # Also migrate from cwd if the user previously had it there
+    if [ ! -f "$TARGET_DIR/mapping.json" ] && [ -f "account_to_arbauft_mapping.json" ] && [ "$TARGET_DIR" != "." ]; then
+        echo "[4] Moving legacy ./account_to_arbauft_mapping.json -> $TARGET_DIR/mapping.json"
+        mv account_to_arbauft_mapping.json "$TARGET_DIR/mapping.json"
+    fi
+    if [ ! -f "$TARGET_DIR/mapping.json" ] && [ -f "mapping.json" ] && [ "$TARGET_DIR" != "." ]; then
+        echo "[4] Moving ./mapping.json -> $TARGET_DIR/mapping.json"
+        mv mapping.json "$TARGET_DIR/mapping.json"
     fi
 
     # Create empty mapping file if needed
-    if [ ! -f "mapping.json" ]; then
-        echo "[4] Creating empty mapping file..."
-        echo "{}" > mapping.json
+    if [ ! -f "$TARGET_DIR/mapping.json" ]; then
+        echo "[4] Creating empty $TARGET_DIR/mapping.json..."
+        echo "{}" > "$TARGET_DIR/mapping.json"
         MAPPING_CREATED=true
     else
-        MAPPING_COUNT=$(grep -c "unit4_arbauft" mapping.json 2>/dev/null || echo "0")
-        echo "[4] Mapping file exists ($MAPPING_COUNT mappings)"
+        MAPPING_COUNT=$(grep -c "unit4_arbauft" "$TARGET_DIR/mapping.json" 2>/dev/null || echo "0")
+        echo "[4] Mapping file exists at $TARGET_DIR/ ($MAPPING_COUNT mappings)"
         MAPPING_CREATED=false
     fi
 else
@@ -154,9 +180,10 @@ echo
 
 if [ "$MODE" = "install" ]; then
     echo "Next steps:"
-    if [ "$CONFIG_CREATED" = true ]; then
-        echo "  1. Edit config.json with your API tokens:"
-        echo "     - Jira: https://id.atlassian.com/manage-profile/security/api-tokens"
+    if [ "$CONFIG_CREATED" = true ] && [ -n "$CONFIG_PATH" ]; then
+        echo "  1. Edit your config with API tokens:"
+        echo "       \$EDITOR $CONFIG_PATH"
+        echo "     - Jira:  https://id.atlassian.com/manage-profile/security/api-tokens"
         echo "     - Tempo: Settings > API Integration in Tempo"
         echo
     fi

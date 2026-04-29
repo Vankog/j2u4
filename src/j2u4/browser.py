@@ -15,7 +15,7 @@ from playwright.async_api import Frame, Page, Request, async_playwright, Browser
 
 from j2u4.models import TempoWorklog, Unit4Entry
 from j2u4.patterns import Patterns
-from j2u4.utils import SESSION_FILE
+from j2u4.utils import session_path
 
 TIMEOUT = 10000  # 10 seconds
 DAY_NAMES = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
@@ -140,8 +140,9 @@ class Unit4Browser:
         # record_video_dir must be set at new_context() time and Playwright
         # writes one .webm per page regardless).
         ctx_kwargs: dict = {"no_viewport": True, "locale": "de"}
-        if os.path.exists(SESSION_FILE):
-            ctx_kwargs["storage_state"] = SESSION_FILE
+        sess = session_path()
+        if sess.exists():
+            ctx_kwargs["storage_state"] = str(sess)
         if self._capture_enabled:
             ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
             self._capture_run_dir = self._capture_dir / f"RUN_{ts}"
@@ -325,9 +326,10 @@ class Unit4Browser:
         # asks for a fresh login. Note: we do NOT call context.close()
         # because that triggers a graceful logout request which Unit4
         # uses to invalidate the session server-side.
-        if self._context and os.path.exists(SESSION_FILE):
+        sess = session_path()
+        if self._context and sess.exists():
             try:
-                await self._context.storage_state(path=SESSION_FILE)
+                await self._context.storage_state(path=str(sess))
             except Exception:
                 pass
 
@@ -374,7 +376,9 @@ class Unit4Browser:
             print("[!] Session expired or not logged in.")
             print("    Please log in (2FA may be required), then press ENTER...")
             await asyncio.get_event_loop().run_in_executor(None, input)
-            await self._context.storage_state(path=SESSION_FILE)
+            sess = session_path()
+            sess.parent.mkdir(parents=True, exist_ok=True)
+            await self._context.storage_state(path=str(sess))
             print("    Session saved for future use.")
             await asyncio.sleep(2)
 

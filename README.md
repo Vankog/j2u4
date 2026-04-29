@@ -178,9 +178,33 @@ Edit `config.json` with your credentials:
 }
 ```
 
+### Where j2u4 looks for config and data files
+
+After `setup.sh`, four files live together (default location, OS-conventional):
+
+| File | Default location |
+|---|---|
+| `config.json` | `~/.config/j2u4/` (Linux/macOS), `%APPDATA%\j2u4\` (Windows) |
+| `mapping.json` | same |
+| `session.json` | same |
+| `sync_history.log` | same |
+
+The `j2u4` command works from any directory because it always looks at
+this user-config directory. The lookup order is:
+
+1. `$J2U4_CONFIG_DIR` if you set it (explicit override)
+2. The current working directory if it contains a `config.json` (the
+   "I'm in the repo, use the local files" case for development)
+3. The user-config directory above
+
+`captures/` is **not** in the user-config dir — it's created relative to
+the current working directory because trace and video files can grow
+large. Set `config.debug.capture_dir` to redirect.
+
 ### First run (login)
 
-On first run, Unit4 will prompt for login (2FA). The session is saved to `session.json` for subsequent runs.
+On first run, Unit4 will prompt for login (2FA). The session is saved to
+`session.json` (in the same directory as `config.json`) for subsequent runs.
 
 ## Usage
 
