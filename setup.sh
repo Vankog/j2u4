@@ -40,20 +40,33 @@ echo
 
 # Check prerequisites
 echo "[0] Checking prerequisites..."
+echo "    j2u4 needs only one tool installed up front: uv."
+echo "    Python is managed by uv automatically — no separate install."
+echo
 
 if ! command -v uv &> /dev/null; then
     echo "    [x] uv NOT FOUND"
     echo
     echo "[!] ERROR: uv is required but not installed."
     echo
-    echo "    Install uv:"
-    echo "    curl -LsSf https://astral.sh/uv/install.sh | sh"
+    echo "    Install uv (one-liner):"
+    echo "      curl -LsSf https://astral.sh/uv/install.sh | sh"
+    echo
+    echo "    Then re-open your shell (or run 'source \$HOME/.cargo/env') so the"
+    echo "    'uv' command is on your PATH, and run ./setup.sh again."
     echo
     echo "    More info: https://docs.astral.sh/uv/getting-started/installation/"
     exit 1
 fi
 
-echo "    [ok] uv $(uv --version 2>/dev/null | awk '{print $2}')"
+UV_VERSION="$(uv --version 2>/dev/null | awk '{print $2}')"
+PY_VERSION="$(uv python find 2>/dev/null | xargs -r -I{} sh -c '{} --version 2>/dev/null' | awk '{print $2}')"
+echo "    [ok] uv $UV_VERSION"
+if [ -n "$PY_VERSION" ]; then
+    echo "    [ok] Python $PY_VERSION (managed by uv)"
+else
+    echo "    [ok] Python: uv will fetch one when needed"
+fi
 echo
 
 # Install/refresh dependencies (uv handles Python + venv automatically)

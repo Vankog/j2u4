@@ -17,13 +17,18 @@ By using this software, you acknowledge that you are solely responsible for any 
 
 ## Requirements
 
+You only need **one tool** installed up front: `uv`. Python comes
+with it.
+
 | Requirement | Notes |
 |-------------|-------|
 | **OS** | Linux / macOS (Windows: use WSL, see below) |
-| **uv** | Python package manager ([install](https://docs.astral.sh/uv/getting-started/installation/)) |
+| **uv** | Python package manager — install once: `curl -LsSf https://astral.sh/uv/install.sh \| sh` ([more info](https://docs.astral.sh/uv/getting-started/installation/)) |
 | **Network** | VPN if required for Unit4 access |
 
-> **Note:** Python is managed automatically by `uv` — no manual installation needed.
+> Python is managed automatically by `uv` — no separate Python install
+> needed. `setup.sh` checks both up front and stops with a clear error
+> if `uv` is missing.
 
 ### Windows Users
 
