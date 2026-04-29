@@ -153,7 +153,9 @@ There are **two** Python environments after setup:
 The two do not interfere. Updating the repo + running `./setup.sh` keeps
 both in sync.
 
-### API Tokens
+## Configuration
+
+### API tokens
 
 You need two API tokens:
 
@@ -161,7 +163,11 @@ You need two API tokens:
 - **Tempo API Token**: Go to Tempo > Settings > API Integration
   `https://<YOUR-ORG>.atlassian.net/plugins/servlet/ac/io.tempo.jira/tempo-app#!/configuration/api-integration`
 
-Edit `config.json` with your credentials:
+### `config.json` — full structure
+
+Only the `jira`, `tempo`, and `unit4` sections are required. Everything
+else has sensible defaults — leave it out unless you want to override.
+
 ```json
 {
   "jira": {
@@ -174,32 +180,62 @@ Edit `config.json` with your credentials:
   },
   "unit4": {
     "url": "https://ubw.unit4cloud.com/<YOUR-TENANT>/Default.aspx"
+  },
+  "mapping": {
+    "help_urls": [
+      "https://<YOUR-ORG>.atlassian.net/wiki/spaces/<SPACE>/pages/.../Customer+Projects",
+      "https://<YOUR-ORG>.atlassian.net/wiki/spaces/<SPACE>/pages/.../Internal+Projects"
+    ]
+  },
+  "debug": {
+    "capture_enabled": true,
+    "capture_dir": "./captures",
+    "capture_cap": 10,
+    "capture_video": true
   }
 }
 ```
 
-### Where j2u4 looks for config and data files
+### Field reference
 
-After `setup.sh`, four files live together (default location, OS-conventional):
+| Path | Required | Default | What it does |
+|---|---|---|---|
+| `jira.base_url` | yes | — | Atlassian Cloud URL, e.g. `https://acme.atlassian.net` |
+| `jira.user_email` | yes | — | Your Atlassian account email |
+| `jira.api_token` | yes | — | Jira API token (Atlassian account → API tokens) |
+| `tempo.api_token` | yes | — | Tempo Cloud API token (Tempo settings → API integration) |
+| `unit4.url` | yes | — | The Unit4 ERP entry URL for your tenant |
+| `mapping.help_urls` | optional | `[]` | URLs shown in the interactive prompt when an account cannot be resolved automatically — e.g. your team's Confluence pages listing the workorder catalogue. The list is **read** by the prompt, never hardcoded in the code |
+| `debug.capture_enabled` | optional | `true` | Capture a Playwright trace per failed browser operation (set `--no-capture` on the CLI to override per run) |
+| `debug.capture_dir` | optional | `./captures` | Where capture folders land. cwd-relative on purpose so traces follow the working directory of the run |
+| `debug.capture_cap` | optional | `10` | Max trace folders kept per run, prevents disk floods on cascading failures |
+| `debug.capture_video` | optional | `true` | Record a `.webm` of the browser session alongside the trace (`--no-video` to override) |
 
-| File | Default location |
+### Environment variables
+
+| Variable | Effect |
 |---|---|
-| `config.json` | `~/.config/j2u4/` (Linux/macOS), `%APPDATA%\j2u4\` (Windows) |
-| `mapping.json` | same |
-| `session.json` | same |
-| `sync_history.log` | same |
+| `J2U4_CONFIG_DIR` | Override the directory where `config.json`, `mapping.json`, `session.json`, and `sync_history.log` are read/written. Top of the lookup chain (see below) |
+| `J2U4_CAPTURE_ALL` | If set to `1`, every trace chunk is persisted (not only failures) and the per-run cap is disabled. Useful for one-shot performance / behaviour analysis |
 
-The `j2u4` command works from any directory because it always looks at
-this user-config directory. The lookup order is:
+### Where j2u4 looks for `config.json`
 
-1. `$J2U4_CONFIG_DIR` if you set it (explicit override)
+The same directory holds `config.json`, `mapping.json`, `session.json`,
+and `sync_history.log`. Lookup order:
+
+1. `$J2U4_CONFIG_DIR` if set (explicit override)
 2. The current working directory if it contains a `config.json` (the
    "I'm in the repo, use the local files" case for development)
-3. The user-config directory above
+3. The OS-conventional user-config dir:
+   - Linux/macOS: `~/.config/j2u4/` (XDG-friendly, honours `$XDG_CONFIG_HOME`)
+   - Windows: `%APPDATA%\j2u4\`
 
-`captures/` is **not** in the user-config dir — it's created relative to
-the current working directory because trace and video files can grow
-large. Set `config.debug.capture_dir` to redirect.
+`./setup.sh` writes the config there on the first run, so `j2u4` works
+from any working directory afterwards.
+
+`captures/` is **not** in this directory — it's created relative to the
+current working directory because trace and video files can grow large.
+Override via `debug.capture_dir`.
 
 ### First run (login)
 
