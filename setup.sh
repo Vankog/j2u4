@@ -52,8 +52,9 @@ if ! command -v uv &> /dev/null; then
     echo "    Install uv (one-liner):"
     echo "      curl -LsSf https://astral.sh/uv/install.sh | sh"
     echo
-    echo "    Then re-open your shell (or run 'source \$HOME/.cargo/env') so the"
-    echo "    'uv' command is on your PATH, and run ./setup.sh again."
+    echo "    The installer drops 'uv' in ~/.local/bin and updates your shell"
+    echo "    rc file. Open a new terminal (or 'source ~/.bashrc' / 'source ~/.zshrc')"
+    echo "    so PATH picks it up, then re-run ./setup.sh."
     echo
     echo "    More info: https://docs.astral.sh/uv/getting-started/installation/"
     exit 1
