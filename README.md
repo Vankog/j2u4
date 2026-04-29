@@ -278,6 +278,27 @@ j2u4 --day 2026-04-29 --execute --no-capture          # skip trace+video
 j2u4 --day 2026-04-29 --execute --capture --no-video  # trace yes, video no
 ```
 
+### Slow Unit4 (`--slow N`)
+
+When Unit4 is under load (peak hours, end of month, etc.) the default
+10-second click timeouts can start to fail. Pass `--slow N` to scale
+both Playwright's per-action delay and the click/wait timeouts by `N`:
+
+```bash
+j2u4 --day 2026-04-29 --execute --slow 2   # 2× — moderate slowdown
+j2u4 --day 2026-04-29 --execute --slow 4   # 4× — busy server hours
+j2u4 --day 2026-04-29 --execute --slow 6   # 6× — when even patience runs out
+```
+
+Default is `--slow 1` (no change). The factor scales:
+- Playwright `slow_mo` (default 100 ms per action → 200/400/600 ms)
+- Click and wait timeouts (default 10 s → 20/40/60 s)
+
+The blanket `asyncio.sleep(...)` calls inside the script are **not**
+scaled — they're already conservative. `--slow N` mainly buys patience
+for individual UI events without making the whole sync proportionally
+slower.
+
 The script syncs **exactly one day per invocation**. The ISO week is derived
 from the date — Sat and Mon of the same calendar week land in the same ISO
 week, no need to compute it yourself.
@@ -479,6 +500,7 @@ at it so the prompt links there.
 | `j2u4` | Dry-run for today |
 | `j2u4 ... --no-capture` | Disable failure-capture for this run (override config) |
 | `j2u4 ... --no-video` | Disable video recording for this run (override config) |
+| `j2u4 ... --slow N` | Scale Playwright slow_mo + click/wait timeouts by N (use 2/4/6 for slow Unit4) |
 
 ## Troubleshooting
 

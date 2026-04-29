@@ -336,7 +336,11 @@ def ask_for_arbauft(
 
 
 async def sync(
-    week: str, target_day: str, execute: bool, config_override: dict | None = None
+    week: str,
+    target_day: str,
+    execute: bool,
+    config_override: dict | None = None,
+    slow_factor: int = 1,
 ):
     """Single-day Tempo→Unit4 sync. ISO week is derived from target_day."""
     dry_run = not execute
@@ -345,6 +349,8 @@ async def sync(
     print()
     print("=" * 70)
     print(f"SYNC TEMPO -> UNIT4 | Day {target_day} (week {week}) | Mode: {mode_label}")
+    if slow_factor > 1:
+        print(f"Slowness: {slow_factor}x (Playwright slow_mo and click timeouts scaled)")
     print("=" * 70)
     print()
 
@@ -435,7 +441,7 @@ async def sync(
     print()
     print("[4] Connecting to Unit4...")
 
-    async with Unit4Browser(config) as unit4:
+    async with Unit4Browser(config, slow_factor=slow_factor) as unit4:
         frame = await unit4.navigate_to_zeiterfassung()
 
         # Set week
@@ -697,6 +703,16 @@ Examples:
         help="Enable / disable browser video recording when capture is on. "
         "Default: from config.json (debug.capture_video), or on if unset.",
     )
+    parser.add_argument(
+        "--slow",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Slow-down factor for Unit4 actions (default 1). "
+        "Scales Playwright per-action delay (slow_mo) and click/wait "
+        "timeouts by N. Use 2/4/6 when Unit4 is under load and the "
+        "default 10s click timeouts start failing.",
+    )
 
     args = parser.parse_args()
 
@@ -735,7 +751,9 @@ Examples:
         print(f"Error: cannot parse date '{target_day}': {e}")
         return 1
 
-    asyncio.run(sync(week, target_day, args.execute, config_override=config))
+    asyncio.run(
+        sync(week, target_day, args.execute, config_override=config, slow_factor=args.slow)
+    )
     return 0
 
 

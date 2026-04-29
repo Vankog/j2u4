@@ -30,7 +30,8 @@ def _default_capture_dir() -> Path:
     """
     return Path(tempfile.gettempdir()) / "j2u4-captures"
 
-TIMEOUT = 10000  # 10 seconds
+TIMEOUT = 10000  # 10 seconds — base value; instances scale this by slow_factor
+SLOW_MO_BASE = 100  # ms per Playwright action — base value; scaled by slow_factor
 DAY_NAMES = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # Bilingual day abbreviation pattern (DE + EN)
@@ -103,10 +104,21 @@ class FrameManager:
 class Unit4Browser:
     """Context manager for Unit4 browser session."""
 
-    def __init__(self, config: dict, headless: bool = False, slow_mo: int = 100):
+    def __init__(
+        self,
+        config: dict,
+        headless: bool = False,
+        slow_factor: int = 1,
+    ):
+        """slow_factor scales both Playwright's per-action slow_mo and the
+        click/wait timeouts. slow_factor=1 is the default; pass 2/4/6 etc.
+        to give a slow Unit4 server more breathing room without the
+        race-condition risk of trimming the asyncio.sleep blanket waits."""
         self.config = config
         self.headless = headless
-        self.slow_mo = slow_mo
+        self.slow_factor = max(1, int(slow_factor))
+        self.slow_mo = SLOW_MO_BASE * self.slow_factor
+        self._timeout = TIMEOUT * self.slow_factor
         self.unit4_url = config.get("unit4", {}).get("url")
         self._playwright = None
         self._browser = None
@@ -486,7 +498,7 @@ class Unit4Browser:
                         continue
 
                 if week_input:
-                    await week_input.click(timeout=TIMEOUT, force=True)
+                    await week_input.click(timeout=self._timeout, force=True)
                     await asyncio.sleep(0.3)
                     await week_input.press("Control+a")
                     await week_input.type(week, delay=30)
@@ -877,12 +889,12 @@ class Unit4Browser:
         try:
             zoom_btn = frame.locator("button[id$='_zoom']").first
             if await zoom_btn.count() > 0:
-                await zoom_btn.click(timeout=TIMEOUT)
+                await zoom_btn.click(timeout=self._timeout)
             else:
                 # Fallback: title-based
                 zoom_icons = await frame.locator("[title*='Detail']").all()
                 if zoom_icons:
-                    await zoom_icons[0].click(timeout=TIMEOUT)
+                    await zoom_icons[0].click(timeout=self._timeout)
                 else:
                     print("FAILED (no zoom)")
                     return False
@@ -918,7 +930,7 @@ class Unit4Browser:
         try:
             akt = frame.locator("input[id*='1680_Editor']:not([disabled])").first
             if await akt.count() > 0:
-                await akt.click(timeout=TIMEOUT)
+                await akt.click(timeout=self._timeout)
                 await akt.press("Control+a")
                 await self.page.keyboard.type("TEMPO", delay=50)
                 await asyncio.sleep(0.6)  # let combobox finish filtering
@@ -1039,10 +1051,10 @@ class Unit4Browser:
                 try:
                     elem = strategy()
                     if await elem.count() > 0 and await elem.first.is_visible(timeout=300):
-                        await elem.first.click(timeout=TIMEOUT)
+                        await elem.first.click(timeout=self._timeout)
                         await asyncio.sleep(0.2)
                         await elem.first.press("Control+a")
-                        await elem.first.fill(value, timeout=TIMEOUT)
+                        await elem.first.fill(value, timeout=self._timeout)
                         await self.page.keyboard.press("Tab")
                         await asyncio.sleep(0.3)
                         return True
@@ -1070,7 +1082,7 @@ class Unit4Browser:
                     print(f"    Date {date_str} not in structure, retrying...", flush=True)
                     zeit = frame.locator("text=/.*(?:Zeitdetails|Time details)/").first
                     if await zeit.count() > 0:
-                        await zeit.click(timeout=TIMEOUT)
+                        await zeit.click(timeout=self._timeout)
                         await asyncio.sleep(1.5)
                     continue
                 print(f"    [!] Date {date_str} not found. Available: {list(date_to_label.keys())}")
@@ -1115,7 +1127,7 @@ class Unit4Browser:
                     print("no cell visible, retry...", flush=True)
                     continue
 
-                await erfasst_cell.dblclick(timeout=TIMEOUT)
+                await erfasst_cell.dblclick(timeout=self._timeout)
                 await asyncio.sleep(0.8)
 
                 # Find active input
@@ -1180,7 +1192,7 @@ class Unit4Browser:
             try:
                 legend = frame.locator(f"legend:has-text('{td_text}')").first
                 if await legend.count() > 0 and await legend.is_visible(timeout=300):
-                    await legend.click(timeout=TIMEOUT)
+                    await legend.click(timeout=self._timeout)
                     await asyncio.sleep(1)
                     return True
             except Exception:
@@ -1230,7 +1242,7 @@ class Unit4Browser:
         try:
             elem = frame.locator(selector).first
             if await elem.count() > 0 and await elem.is_visible(timeout=500):
-                await elem.click(timeout=TIMEOUT)
+                await elem.click(timeout=self._timeout)
                 return True
         except Exception:
             pass
@@ -1247,10 +1259,10 @@ class Unit4Browser:
             base = frame.locator(selector)
             elem = base.last if use_last else base.first
             if await elem.count() > 0 and await elem.is_visible(timeout=500):
-                await elem.click(timeout=TIMEOUT)
+                await elem.click(timeout=self._timeout)
                 await asyncio.sleep(0.2)
                 await elem.press("Control+a")
-                await elem.fill(value, timeout=TIMEOUT)
+                await elem.fill(value, timeout=self._timeout)
                 await self.page.keyboard.press("Tab")
                 await asyncio.sleep(0.3)
                 return True
@@ -1272,7 +1284,7 @@ class Unit4Browser:
             try:
                 elem = strategy()
                 if await elem.count() > 0 and await elem.is_visible(timeout=300):
-                    await elem.click(timeout=TIMEOUT)
+                    await elem.click(timeout=self._timeout)
                     return True
             except Exception:
                 continue
