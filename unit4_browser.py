@@ -106,6 +106,9 @@ class Unit4Browser:
         self._capture_dir: Path = Path(debug_cfg.get("capture_dir", "./captures"))
         self._capture_cap: int = int(debug_cfg.get("capture_cap", 10))
         self._capture_video: bool = bool(debug_cfg.get("capture_video", True))
+        # Diagnostic mode: keep every chunk, not just failures. Set
+        # J2U4_CAPTURE_ALL=1 to enable. Bypasses capture_cap.
+        self._capture_all: bool = bool(os.environ.get("J2U4_CAPTURE_ALL"))
         self._capture_run_dir: Path | None = None
         self._capture_count: int = 0
         self._tracing_active: bool = False
@@ -203,8 +206,16 @@ class Unit4Browser:
             print(f"[!] start_chunk failed: {e}")
 
     async def _discard_chunk(self) -> None:
-        """Stop and discard the active chunk (success path)."""
+        """Stop and discard the active chunk (success path).
+
+        In diagnostic mode (J2U4_CAPTURE_ALL=1) the chunk is persisted with
+        a SUCCESS_* step name instead of being discarded — useful for
+        offline performance analysis of working flows.
+        """
         if not self._chunk_active:
+            return
+        if self._capture_all:
+            await self._save_failure_chunk("SUCCESS", None, exc_text=None)
             return
         try:
             await self._context.tracing.stop_chunk()
@@ -223,7 +234,8 @@ class Unit4Browser:
         if not self._chunk_active:
             return
         try:
-            if self._capture_count >= self._capture_cap:
+            # In diagnostic mode, skip the cap so we capture the whole run.
+            if not self._capture_all and self._capture_count >= self._capture_cap:
                 print(
                     f"[!] capture cap ({self._capture_cap}) reached, suppressing further captures"
                 )
@@ -307,6 +319,13 @@ class Unit4Browser:
                 pass
             self._tracing_active = False
 
+        # Close context explicitly so Playwright finalises the video file.
+        # browser.close() alone leaves the .webm at 0 bytes.
+        if self._context:
+            try:
+                await self._context.close()
+            except Exception:
+                pass
         if self._browser:
             await self._browser.close()
         if self._playwright:
