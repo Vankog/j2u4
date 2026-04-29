@@ -4,6 +4,12 @@ session.json
 account_to_arbauft_mapping.json
 ui_inspection.json
 
+# Failure captures (Playwright traces, videos, context.json — may contain DOM contents)
+captures/
+
+# Per-run sync history (worklog ids, ticket keys, ArbAuft codes — may contain customer info)
+sync_history.log
+
 # Python
 __pycache__/
 *.py[cod]

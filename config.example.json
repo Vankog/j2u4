@@ -9,5 +9,11 @@
   },
   "unit4": {
     "url": "https://ubw.unit4cloud.com/YOUR_TENANT/Default.aspx"
+  },
+  "debug": {
+    "capture_enabled": true,
+    "capture_dir": "./captures",
+    "capture_cap": 10,
+    "capture_video": true
   }
 }

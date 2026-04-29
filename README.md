@@ -53,9 +53,9 @@ cd j2u4
 # 3. Test connectivity
 ./sync --check
 
-# 4. Sync a week (dry-run first, then execute)
-./sync 202606
-./sync 202606 --execute
+# 4. Sync a day (dry-run first, then execute)
+./sync --day 2026-04-29
+./sync --day 2026-04-29 --execute
 ```
 
 ## How it works
@@ -138,44 +138,74 @@ On first run, Unit4 will prompt for login (2FA). The session is saved to `sessio
 
 This tests Jira, Tempo, and Unit4 connectivity before syncing.
 
-### Sync a specific week
+### Sync a day
 
 ```bash
-# Dry-run (default) - shows what would happen
-./sync 202605
+# Dry-run — shows what would happen for a specific day
+./sync --day 2026-04-29
 
-# Execute - actually creates entries (runs fully unattended)
-./sync 202605 --execute
+# Execute — syncs this single day, fully unattended
+./sync --day 2026-04-29 --execute
+
+# No --day = today
+./sync                       # dry-run for today
+./sync --execute             # ← error: --day required for --execute
 ```
 
-The week format is `YYYYWW` (ISO week number), e.g., `202605` = Week 5 of 2026.
+The script syncs **exactly one day per invocation**. The ISO week is derived
+from the date — Sat and Mon of the same calendar week land in the same ISO
+week, no need to compute it yourself.
 
-`--execute` runs end-to-end without user interaction: open browser, delete old
-`[WL:]` entries, create new ones, save. The only situation that requires manual
-input is when the script encounters a Tempo Account it does not yet know — see
-[Account Mappings](#account-mappings) for the one-time learning step.
+Each invocation is atomic: the script reads the entire week's `[WL:]`
+markers, but only deletes-and-recreates the ones whose Tempo worklog id
+belongs to the target day. Other days' markers stay untouched. If the run
+hangs or fails, only one day is affected; other days can be re-run in
+their own invocations.
 
-### Other options
-
-```bash
-# Limit to first N entries (sorted by date, ticket) — useful for testing
-./sync 202605 --limit 3 --execute
-
-# Extend the week's end date (e.g. include weekend bookings)
-./sync 202605 --end 2026-02-08 --execute
-
-# Cutover: only sync from this date onwards within the week
-./sync 202605 --cutover 2026-02-03 --execute
-```
+Each `--execute` run appends a block to `./sync_history.log` (gitignored)
+so you can see which markers were deleted and created — see
+[Tracking log](#tracking-log) below.
 
 ### What the script does
 
-1. Fetches worklogs from Tempo for the specified week
-2. Looks up Jira issues to get the Account field
-3. Maps Account → Unit4 ArbAuft code
-4. Opens Unit4 in a browser (you can watch!)
-5. **Deletes** all existing `[WL:xxx]` entries for that week
-6. **Creates** fresh entries from Tempo
+1. Derives the ISO week from `--day` (e.g. `2026-04-29` → `202618`)
+2. Fetches Tempo worklogs for that single day
+3. Looks up Jira issues to get the Account field
+4. Maps Account → Unit4 ArbAuft code
+5. Opens Unit4 (browser is visible — you can watch)
+6. Reads existing `[WL:]` markers in the current week
+7. Filters them to the target day's worklog ids
+8. **Deletes** these markers
+9. **Creates** fresh entries from Tempo
+10. **Saves**, then writes the result to `sync_history.log`
+
+### Known limitation: date drift
+
+Deletion is keyed by Tempo worklog id, not by row date in Unit4. If a Tempo
+worklog moved from day A to day B but its `[WL:N]` marker still sits on day
+A in Unit4, the day-A sync will *not* delete it (id N is no longer among
+day A's worklogs). The day-B sync will pick it up wherever it is in the
+visible week and recreate it correctly. Truly orphan markers (Tempo worklog
+deleted) need manual cleanup in Unit4 — there is no bulk-cleanup mode in
+this script.
+
+### Tracking log
+
+Each `--execute` run appends a block to `./sync_history.log`:
+
+```
+=== 2026-04-27T18:30:15 week=202618 day=2026-04-27 ===
+DELETE [WL:30007] PROJ-16
+CREATE [WL:30007] PROJ-16 0.5h 1018-10175-100
+CREATE [WL:30008] PROJ-127 0.75h 1018-10089-108
+SAVE ok
+```
+
+On failure, `SAVE fail ref=captures/RUN_<ts>` points to the failure capture
+folder for diagnosis (see [Failure captures](#failure-captures)).
+
+The file is in `.gitignore` because it contains worklog ids, ticket keys, and
+ArbAuft codes — review before sharing externally.
 
 ### Entry marker format
 
@@ -202,11 +232,14 @@ This allows tracking which Unit4 entries were synced from which Tempo worklog.
 | `inspect_ui.py` | UI inspector — dumps Unit4 element attributes to `ui_inspection.json` |
 | `debug_dialog_inputs.py` | One-shot dialog inspector — dumps input IDs from the Add+Zoom dialog |
 | `test_patterns.py` | Offline pytest suite (regex + locale config) |
+| `test_capture_failure.py` | Offline tests for the failure-capture helper |
+| `test_per_day_sync.py` | Offline tests for per-day filter + tracking log |
 | `test_jira_connection.py` | Manual Jira/Tempo connectivity test script |
 | `config.json` | Credentials (gitignored!) |
 | `config.example.json` | Template for config.json |
 | `account_to_arbauft_mapping.json` | Account to ArbAuft mapping (gitignored!) |
 | `session.json` | Browser session (gitignored!) |
+| `sync_history.log` | Append-only per-run log (gitignored!) |
 
 ## Account Mappings
 
@@ -269,12 +302,9 @@ It's the "ArbAuft" field in the entry form.
 |---------|-------------|
 | `./setup.sh` | Initial setup (run once after cloning) |
 | `./sync --check` | Test connectivity to Jira, Tempo, Unit4 |
-| `./sync YYYYWW` | Dry-run sync for week (e.g., `./sync 202606`) |
-| `./sync YYYYWW --execute` | Actually sync the week |
-| `./sync YYYYWW --cutover YYYY-MM-DD --execute` | Sync from cutover date onwards |
-| `./sync YYYYWW --end YYYY-MM-DD --execute` | Extend the week's end date (e.g. include weekend) |
-| `./sync YYYYWW --limit N --execute` | Sync only the first N entries (testing) |
-| `./sync YYYYWW --day YYYY-MM-DD` | **Fallback** semi-auto mode (see Troubleshooting) |
+| `./sync --day YYYY-MM-DD --execute` | Sync this single day |
+| `./sync --day YYYY-MM-DD` | Dry-run for that day |
+| `./sync` | Dry-run for today |
 | `./build-mapping` | Build mappings from last 8 weeks |
 | `./build-mapping --weeks N` | Build mappings from last N weeks |
 | `./build-mapping --from YYYYWW --to YYYYWW` | Build mappings from specific range |
@@ -307,18 +337,19 @@ It's the "ArbAuft" field in the entry form.
 - The script will detect this and prompt for re-login
 - If issues persist, delete `session.json` and run again
 
-### Bulk `--execute` gets stuck on a specific day
-The bulk flow normally runs unattended. If a single day trips it up
-(unusual UI state, stale dialog, etc.), fall back to per-day semi-automatic
-mode with `--day` — the script fills ArbAuft / Activity / Text / Ticketno,
-you enter hours and click OK manually:
+### A specific day failed
+Each invocation handles exactly one day, so failures are isolated. When a
+day fails:
 
-```bash
-./sync 202605 --day 2026-02-02
-./sync 202605 --day 2026-02-02 --day 2026-02-03
-```
+1. Check `captures/RUN_*/` — the trace is there.
+2. Check `sync_history.log` — the most recent block records `SAVE fail`
+   with a back-reference to the capture folder.
+3. Open the trace: `uv run playwright show-trace captures/RUN_*/.../trace.zip`
+4. Fix the underlying cause and re-run `./sync --day YYYY-MM-DD --execute`.
 
-`--day` implies `--execute` (no dry-run for individual days).
+The re-run will detect the partial state (some `[WL:]` markers from the
+failed run, some missing) and bring the day to consistency by deleting
+and recreating the target day's markers.
 
 ### Unit4 language
 - The browser automation works with both **German** and **English** Unit4 UI
@@ -328,6 +359,48 @@ you enter hours and click OK manually:
   uv run python inspect_ui.py
   ```
   This opens Unit4, scans all UI elements, and saves their HTML attributes to `ui_inspection.json`.
+
+## Failure captures
+
+When something goes wrong during the browser automation (Add button missing, dialog freezes, hours fill fails, save errors out), the script writes a **Playwright trace** for that specific failure. Each capture is a self-contained folder you can ZIP up and send for diagnosis.
+
+### Where captures land
+
+```
+captures/
+└── RUN_2026-04-28T14-23-05/
+    ├── 2026-04-28T14-23-49_CREATE_PROJ-123/
+    │   ├── trace.zip       # Playwright trace — open in Trace Viewer
+    │   ├── context.json    # worklog data, step, exception, recent page errors
+    │   └── README.txt      # short instructions
+    └── *.webm              # browser video for the whole run (if capture_video)
+```
+
+If the run finishes without any failure, the whole `RUN_*` folder is deleted automatically — no clutter from successful runs.
+
+### Opening a trace
+
+```bash
+uv run playwright show-trace captures/RUN_<ts>/<failure-folder>/trace.zip
+```
+
+The Trace Viewer shows every action with before/after DOM snapshots, network and console logs, and a screenshot timeline. This is usually enough to see *exactly* what the browser was doing when the failure happened.
+
+### Privacy warning
+
+Traces and videos contain **DOM content of the entire week** that was visible during the failure — not only the failing worklog. Other tickets, descriptions, customer names may be present. Review captures before sharing externally.
+
+### Disabling captures
+
+Set in `config.json`:
+
+```json
+"debug": {
+  "capture_enabled": false
+}
+```
+
+The whole `debug` block is optional; defaults are `capture_enabled: true`, `capture_dir: "./captures"`, `capture_cap: 10`, `capture_video: true`.
 
 ## Testing
 
@@ -346,7 +419,7 @@ uv run pytest
 - Locale configuration consistency (both locales define the same keys, non-empty values)
 
 **What requires manual verification:**
-- Browser automation against a live Unit4 instance (`./sync --check`, then `./sync YYYYWW`)
+- Browser automation against a live Unit4 instance (`./sync --check`, then `./sync --day YYYY-MM-DD --execute`)
 - Session handling, login flow, 2FA
 
 ## Security
