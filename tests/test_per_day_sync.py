@@ -114,3 +114,16 @@ def test_week_from_date_year_boundary():
     assert week_from_date("2025-12-29") == "202601"
     # 2027-01-01 is Fri — ISO week 53 of 2026
     assert week_from_date("2027-01-01") == "202653"
+
+
+def test_week_override_format_validation():
+    """--week accepts YYYYWW (6 digits), rejects everything else."""
+    from j2u4.patterns import Patterns
+
+    assert Patterns.WEEK_FORMAT.match("202619")
+    assert Patterns.WEEK_FORMAT.match("202601")
+    # 5 digits, 7 digits, letters → no match
+    assert not Patterns.WEEK_FORMAT.match("20261")
+    assert not Patterns.WEEK_FORMAT.match("2026019")
+    assert not Patterns.WEEK_FORMAT.match("2026-19")
+    assert not Patterns.WEEK_FORMAT.match("abc619")

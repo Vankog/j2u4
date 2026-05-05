@@ -45,6 +45,23 @@ The script syncs **exactly one day per invocation**. The ISO week is derived
 from the date — Sat and Mon of the same calendar week land in the same ISO
 week, no need to compute it yourself.
 
+### Override the week (`--week YYYYWW`)
+
+Some companies cut the booking period at month-end, producing
+truncated or extended weeks that don't match the ISO calendar. If you
+sync e.g. Saturday 2 May 2026 and the resulting ISO week (18) is
+already submitted in Unit4 — but the company's May booking period
+puts that Saturday on the week-19 sheet — pass `--week` explicitly:
+
+```bash
+j2u4 --day 2026-05-02 --week 202619 --execute
+```
+
+Without `--week`, the ISO week of the date is used (default,
+unchanged behaviour). With `--week`, the value you pass wins; j2u4
+prints a notice when the override differs from the ISO derivation so
+you can spot mistakes.
+
 Each invocation is atomic: the sync reads the entire week's `[WL:]`
 markers, but only deletes-and-recreates the ones whose Tempo worklog id
 belongs to the target day. Other days' markers stay untouched. If the run
@@ -245,4 +262,5 @@ This allows tracking which Unit4 entries were synced from which Tempo worklog.
 | `j2u4 ... --no-capture` | Disable failure-capture for this run (override config) |
 | `j2u4 ... --no-video` | Disable video recording for this run (override config) |
 | `j2u4 ... --slow N` | Scale Playwright slow_mo + click/wait timeouts by N (use 2/4/6 for slow Unit4) |
+| `j2u4 ... --week YYYYWW` | Override the Unit4 Woche/Periode (e.g. when month-end shifts a weekend onto the next week's sheet) |
 | `j2u4 --init` | Interactive setup of config.json (helper links + hidden token input) |

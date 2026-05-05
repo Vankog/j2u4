@@ -899,6 +899,15 @@ Examples:
         "Default: from config.json (debug.capture_video), or on if unset.",
     )
     parser.add_argument(
+        "--week",
+        metavar="YYYYWW",
+        help="Override the Unit4 Woche/Periode for this sync (e.g. 202619). "
+        "By default the ISO week is derived from --day. Use this when the "
+        "company's booking period spans calendar weeks differently — e.g. a "
+        "month-end Saturday that ISO-says belongs to the previous week but "
+        "Unit4's booking period puts on the next week's sheet.",
+    )
+    parser.add_argument(
         "--slow",
         type=int,
         default=1,
@@ -944,12 +953,28 @@ Examples:
         print(f"Error: Invalid date format '{target_day}'. Expected YYYY-MM-DD")
         return 1
 
-    # Derive ISO week from the day
-    try:
-        week = week_from_date(target_day)
-    except ValueError as e:
-        print(f"Error: cannot parse date '{target_day}': {e}")
-        return 1
+    # Resolve week: explicit --week wins over the ISO derivation.
+    if args.week:
+        if not Patterns.WEEK_FORMAT.match(args.week):
+            print(f"Error: Invalid week format '{args.week}'. Expected YYYYWW (e.g. 202619).")
+            return 1
+        week = args.week
+        derived = None
+        try:
+            derived = week_from_date(target_day)
+        except ValueError:
+            pass
+        if derived and derived != week:
+            print(
+                f"[*] Using --week {week} (overrides ISO derivation {derived} "
+                f"for {target_day})."
+            )
+    else:
+        try:
+            week = week_from_date(target_day)
+        except ValueError as e:
+            print(f"Error: cannot parse date '{target_day}': {e}")
+            return 1
 
     asyncio.run(
         sync(week, target_day, args.execute, config_override=config, slow_factor=args.slow)
