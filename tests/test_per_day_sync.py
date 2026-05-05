@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from j2u4.cli import TrackingLog, week_from_date
+from j2u4.cli import TrackingLog, shift_week, week_from_date
 from j2u4.models import TempoWorklog, Unit4Entry
 
 
@@ -127,3 +127,21 @@ def test_week_override_format_validation():
     assert not Patterns.WEEK_FORMAT.match("2026019")
     assert not Patterns.WEEK_FORMAT.match("2026-19")
     assert not Patterns.WEEK_FORMAT.match("abc619")
+
+
+def test_shift_week_relative():
+    """shift_week shifts the ISO week of a date by N weeks."""
+    # Sat 2 May 2026 — ISO 18; +1 → 19; -1 → 17
+    assert shift_week("2026-05-02", 0) == "202618"
+    assert shift_week("2026-05-02", 1) == "202619"
+    assert shift_week("2026-05-02", -1) == "202617"
+
+
+def test_shift_week_year_boundary():
+    """Shifting across year boundaries follows ISO: +1 from week 53 lands in week 1 of next year."""
+    # 2027-01-01 is ISO week 53 of 2026
+    assert shift_week("2027-01-01", 0) == "202653"
+    # +1 → first ISO week of 2027 (depends on calendar; 2027-01-08 is in week 1)
+    assert shift_week("2027-01-01", 1) == "202701"
+    # -1 → previous week
+    assert shift_week("2027-01-01", -1) == "202652"

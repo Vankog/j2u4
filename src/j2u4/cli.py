@@ -13,7 +13,7 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from getpass import getpass
 from pathlib import Path
 
@@ -844,6 +844,19 @@ def week_from_date(date_str: str) -> str:
     return f"{year:04d}{week_num:02d}"
 
 
+def shift_week(date_str: str, offset_weeks: int) -> str:
+    """Return the ISO week (YYYYWW) of `date_str` shifted by N weeks.
+
+    Used for `--week +N / -N`: the user knows the calendar week derived
+    from --day is wrong by some constant offset (typically ±1 at month
+    boundaries), and just wants to shift it without looking up the
+    target week number themselves.
+    """
+    d = datetime.strptime(date_str, "%Y-%m-%d") + timedelta(weeks=offset_weeks)
+    year, week_num, _ = d.isocalendar()
+    return f"{year:04d}{week_num:02d}"
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Sync Tempo worklogs to Unit4 (one day per invocation)",
@@ -900,12 +913,14 @@ Examples:
     )
     parser.add_argument(
         "--week",
-        metavar="YYYYWW",
-        help="Override the Unit4 Woche/Periode for this sync (e.g. 202619). "
-        "By default the ISO week is derived from --day. Use this when the "
-        "company's booking period spans calendar weeks differently — e.g. a "
-        "month-end Saturday that ISO-says belongs to the previous week but "
-        "Unit4's booking period puts on the next week's sheet.",
+        metavar="VALUE",
+        help="Override the Unit4 Woche/Periode for this sync. Three forms: "
+        "(a) absolute YYYYWW (e.g. 202619), "
+        "(b) relative offset like +1 / -1 — shifts the ISO week derived "
+        "from --day by N weeks, "
+        "(c) shorthand 'next' / 'prev' — same as +1 / -1. "
+        "Use this when the company's booking period cuts at month-end and "
+        "the ISO week of --day doesn't match Unit4's sheet.",
     )
     parser.add_argument(
         "--slow",
@@ -954,27 +969,46 @@ Examples:
         return 1
 
     # Resolve week: explicit --week wins over the ISO derivation.
+    try:
+        derived = week_from_date(target_day)
+    except ValueError as e:
+        print(f"Error: cannot parse date '{target_day}': {e}")
+        return 1
+
     if args.week:
-        if not Patterns.WEEK_FORMAT.match(args.week):
-            print(f"Error: Invalid week format '{args.week}'. Expected YYYYWW (e.g. 202619).")
-            return 1
-        week = args.week
-        derived = None
-        try:
-            derived = week_from_date(target_day)
-        except ValueError:
-            pass
-        if derived and derived != week:
+        raw = args.week.strip().lower()
+        if raw in ("next", "+1"):
+            offset = 1
+        elif raw in ("prev", "previous", "-1"):
+            offset = -1
+        elif raw.startswith(("+", "-")) and raw[1:].isdigit():
+            offset = int(raw)
+        else:
+            offset = None
+
+        if offset is not None:
+            week = shift_week(target_day, offset)
+            sign = "+" if offset > 0 else ""
             print(
-                f"[*] Using --week {week} (overrides ISO derivation {derived} "
-                f"for {target_day})."
+                f"[*] --week {sign}{offset}: shifting from ISO {derived} "
+                f"to {week} (relative to {target_day})."
             )
-    else:
-        try:
-            week = week_from_date(target_day)
-        except ValueError as e:
-            print(f"Error: cannot parse date '{target_day}': {e}")
+        elif Patterns.WEEK_FORMAT.match(args.week):
+            week = args.week
+            if week != derived:
+                print(
+                    f"[*] Using --week {week} (overrides ISO derivation "
+                    f"{derived} for {target_day})."
+                )
+        else:
+            print(
+                f"Error: Invalid --week value '{args.week}'. "
+                f"Expected YYYYWW (e.g. 202619), or +N / -N (e.g. +1), "
+                f"or 'next' / 'prev'."
+            )
             return 1
+    else:
+        week = derived
 
     asyncio.run(
         sync(week, target_day, args.execute, config_override=config, slow_factor=args.slow)
