@@ -558,10 +558,24 @@ async def sync(
     # Fetch Tempo worklogs per account (Mo–So of the ISO week, then filter
     # to target_day). Per-account fetching is permission-friendly: no
     # Jira-issue read needed for the account resolution.
+    #
+    # Two weeks are at play when `--week` overrides the Unit4 booking sheet:
+    #   - target_day's ISO week — required so the day's worklogs are in the
+    #     fetch range.
+    #   - the Unit4 sheet's week — required for whole-week orphan detection
+    #     so legitimate entries there aren't flagged as orphans.
+    # Span the union of both; with no override they collapse to one week.
     print()
     print(f"[1] Fetching Tempo worklogs (whole week, per Tempo account)...")
 
-    week_from, week_to = get_week_dates(week)
+    day_week = week_from_date(target_day)
+    day_from, day_to = get_week_dates(day_week)
+    if week != day_week:
+        sheet_from, sheet_to = get_week_dates(week)
+        week_from = min(day_from, sheet_from)
+        week_to = max(day_to, sheet_to)
+    else:
+        week_from, week_to = day_from, day_to
     try:
         valid_worklogs, unmapped_worklogs, week_worklog_ids = fetch_and_resolve_worklogs(
             config, target_day, (week_from, week_to), mapping
