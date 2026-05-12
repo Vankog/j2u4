@@ -885,16 +885,28 @@ class Unit4Browser:
             return False
         await asyncio.sleep(1)
 
-        # Click first zoom icon (new row) — ID-based
+        # Click the zoom of the row currently in edit mode. The newly-added
+        # row has `class="EditRow"`; saved rows have `ListItem`/`AltListItem`.
+        # Targeting `.first` on `button[id$='_zoom']` is wrong when a user's
+        # grid sorts new rows *below* existing ones — the topmost zoom is then
+        # an old row, and the dialog overwrites that one instead of the new
+        # one. The EditRow selector is sort-order-agnostic.
+        edit_zoom = frame.locator("tr.EditRow button[id$='_zoom']")
         try:
-            zoom_btn = frame.locator("button[id$='_zoom']").first
-            if await zoom_btn.count() > 0:
-                await zoom_btn.click(timeout=self._timeout)
+            # Brief wait for the Add postback to render the EditRow.
+            for _ in range(20):
+                if await edit_zoom.count() > 0:
+                    break
+                await asyncio.sleep(0.1)
+
+            if await edit_zoom.count() > 0:
+                await edit_zoom.first.click(timeout=self._timeout)
             else:
-                # Fallback: title-based
-                zoom_icons = await frame.locator("[title*='Detail']").all()
-                if zoom_icons:
-                    await zoom_icons[0].click(timeout=self._timeout)
+                # Fallback: any zoom (legacy behavior). If the EditRow class
+                # is missing we'd rather miss the row than abort the sync.
+                fallback = frame.locator("button[id$='_zoom']").first
+                if await fallback.count() > 0:
+                    await fallback.click(timeout=self._timeout)
                 else:
                     print("FAILED (no zoom)")
                     return False
