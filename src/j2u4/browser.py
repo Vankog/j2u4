@@ -929,27 +929,31 @@ class Unit4Browser:
         )
         print("OK" if arbauft_ok else "FAIL", end=" | ", flush=True)
 
-        # Wait for Aktivität to be enabled (ArbAuft postback)
-        await self._wait_for_enabled(frame, "input[id*='1680_Editor']", timeout_s=4.0)
+        # Wait for Aktivität to be enabled (ArbAuft postback). 8s leaves
+        # headroom for slower sessions — observed UNVOLLSTÄNDIG with 4s.
+        await self._wait_for_enabled(frame, "input[id*='1680_Editor']", timeout_s=8.0)
 
         # Aktivität is an ARIA combobox. fill("TEMPO") snaps to NOTEMPO
         # because Unit4 selects the first alphabetical match. Workaround:
         # type per-character, give the combobox time to filter, then commit.
         # Without the sleep, Tab fires before Unit4 finishes filtering and
         # the still-default selection (NOTEMPO) gets accepted.
-        print("Aktivität...", end=" ", flush=True)
-        aktivitaet_ok = False
-        try:
-            akt = frame.locator("input[id*='1680_Editor']:not([disabled])").first
-            if await akt.count() > 0:
+        async def _try_aktivitaet() -> bool:
+            try:
+                akt = frame.locator("input[id*='1680_Editor']:not([disabled])").first
+                if await akt.count() == 0:
+                    return False
                 await akt.click(timeout=self._timeout)
                 await akt.press("Control+a")
                 await self.page.keyboard.type("TEMPO", delay=50)
                 await asyncio.sleep(0.6)  # let combobox finish filtering
                 await self.page.keyboard.press("Tab")
-                aktivitaet_ok = True
-        except Exception:
-            aktivitaet_ok = False
+                return True
+            except Exception:
+                return False
+
+        print("Aktivität...", end=" ", flush=True)
+        aktivitaet_ok = await _try_aktivitaet()
         print("OK" if aktivitaet_ok else "FAIL", end=" | ", flush=True)
 
         print("Text...", end=" ", flush=True)
@@ -964,9 +968,15 @@ class Unit4Browser:
         )
         print("OK" if ticketno_ok else "FAIL")
 
-        # Retry failed Text/Ticketno once (postback timing)
-        if not (text_ok and ticketno_ok):
+        # Retry failed Aktivität/Text/Ticketno once (postback timing)
+        if not (aktivitaet_ok and text_ok and ticketno_ok):
             await asyncio.sleep(1)
+            if not aktivitaet_ok:
+                # Re-wait in case the field was still pending enable.
+                await self._wait_for_enabled(frame, "input[id*='1680_Editor']", timeout_s=4.0)
+                print("    retry Aktivität...", end=" ", flush=True)
+                aktivitaet_ok = await _try_aktivitaet()
+                print("OK" if aktivitaet_ok else "FAIL")
             if not text_ok:
                 print("    retry Text...", end=" ", flush=True)
                 text_ok = await self._fill_field_by_id(
