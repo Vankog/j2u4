@@ -680,18 +680,82 @@ async def sync(
         existing_entries = await unit4.extract_entries(debug=True)
         print(f"    Found {len(existing_entries)} synced entries (whole week)")
 
+        # Resolve ticketno=UNKNOWN entries via Tempo + Jira. The row-text
+        # scan misses the ticket key when Unit4 holds the description in
+        # an <input> instead of a title attribute (typical for freshly
+        # created rows whose title hasn't been re-rendered yet). Looking
+        # the worklog up gives us its issue id; Jira gives us the key.
+        # The Tempo response is cached so the orphan-check below reuses
+        # the same call — no extra HTTP for UNKNOWN markers that are also
+        # outside the week_worklog_ids set.
+        tempo = TempoClient(config)
+        jira = JiraClient(config)
+        worklog_cache: dict[int, dict | None] = {}
+        unknown_entries = [
+            e for e in existing_entries
+            if e.worklog_id is not None and e.ticketno == "UNKNOWN"
+        ]
+        for entry in unknown_entries:
+            try:
+                wl_data = worklog_cache.setdefault(
+                    entry.worklog_id, tempo.get_worklog(entry.worklog_id)
+                )
+            except ApiError as e:
+                print(f"    [resolve] WL:{entry.worklog_id}: Tempo lookup failed ({e})")
+                continue
+            if not wl_data:
+                continue
+            issue_id = (wl_data.get("issue") or {}).get("id")
+            if not issue_id:
+                continue
+            issue = jira.get_issue_details(issue_id)
+            key = (issue or {}).get("key")
+            if key:
+                entry.ticketno = key
+
         # Combine two delete-sets:
         # 1. Target-day markers: their worklog_id is in today's valid_worklogs
         #    → delete + recreate (the day-sync core)
-        # 2. Orphans: marker present in Unit4 but no longer in Tempo's whole
-        #    week → delete (no recreate). Catches deleted Tempo worklogs.
+        # 2. Orphans: marker present in Unit4 AND the worklog is gone in
+        #    Tempo → delete (no recreate). Catches deleted Tempo worklogs.
+        #
+        # An ID outside `week_worklog_ids` is only *suspected* of being an
+        # orphan — it can also be an entry booked into this Unit4 sheet via
+        # `--week` override from a different ISO week (the override pushes
+        # data into a sheet whose week range doesn't overlap the Tempo date
+        # of the worklog). Confirm with a direct Tempo lookup before deleting.
         target_wl_ids = {wl.worklog_id for wl in valid_worklogs}
-        orphan_ids = {
+        suspected_orphans = [
             e.worklog_id for e in existing_entries
             if e.worklog_id is not None and e.worklog_id not in week_worklog_ids
-        }
+        ]
+        orphan_ids: set[int] = set()
+        spared: list[int] = []
+        for wl_id in suspected_orphans:
+            try:
+                if wl_id in worklog_cache:
+                    exists = worklog_cache[wl_id] is not None
+                else:
+                    wl_data = tempo.get_worklog(wl_id)
+                    worklog_cache[wl_id] = wl_data
+                    exists = wl_data is not None
+            except ApiError as e:
+                # Be conservative: a transient Tempo error must NOT cause us
+                # to delete a real entry. Spare the marker and warn.
+                print(f"    [orphan-cleanup] WL:{wl_id}: Tempo lookup failed ({e}) — sparing")
+                spared.append(wl_id)
+                continue
+            if exists:
+                spared.append(wl_id)
+            else:
+                orphan_ids.add(wl_id)
+        if spared:
+            print(f"    [orphan-cleanup] {len(spared)} marker(s) outside fetch range but live in Tempo — kept:")
+            for entry in existing_entries:
+                if entry.worklog_id in spared:
+                    print(f"      - [WL:{entry.worklog_id}] {entry.ticketno}")
         if orphan_ids:
-            print(f"    [orphan-cleanup] {len(orphan_ids)} markers in Unit4 with no matching Tempo worklog — will be deleted:")
+            print(f"    [orphan-cleanup] {len(orphan_ids)} marker(s) confirmed gone in Tempo — will be deleted:")
             for entry in existing_entries:
                 if entry.worklog_id in orphan_ids:
                     print(f"      - [WL:{entry.worklog_id}] {entry.ticketno}")

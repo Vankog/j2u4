@@ -137,3 +137,42 @@ class TempoClient:
             f"https://api.tempo.io/4/worklogs/account/{account_key}",
             {"from": date_from, "to": date_to, "limit": 1000},
         )
+
+    def get_worklog(self, worklog_id: int) -> dict | None:
+        """Direct lookup of a single worklog by id. Used by orphan detection
+        (verify a Unit4 marker is truly gone in Tempo, not just outside the
+        fetched range) and by ticket-name resolution (recover the Jira issue
+        id when the Unit4 row scan only yielded the WL marker).
+
+        Returns:
+            The worklog dict on HTTP 200.
+            None if Tempo says it does not exist (HTTP 404).
+
+        Raises:
+            ApiError on any other failure (network, auth, 5xx) so the
+            caller can decide to abort instead of mistakenly treating
+            a transient error as a missing worklog.
+        """
+        try:
+            r = requests.get(
+                f"https://api.tempo.io/4/worklogs/{worklog_id}",
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Accept": "application/json",
+                },
+                timeout=15,
+            )
+        except requests.exceptions.ConnectionError:
+            raise ApiError("Tempo: Cannot connect to api.tempo.io. Check your network!")
+        except requests.exceptions.Timeout:
+            raise ApiError("Tempo: Connection timed out.")
+        if r.status_code == 200:
+            return r.json()
+        if r.status_code == 404:
+            return None
+        raise ApiError(_handle_api_error(r, "Tempo"), r.status_code)
+
+    def worklog_exists(self, worklog_id: int) -> bool:
+        """Thin wrapper around get_worklog() for callers that only need
+        existence, not the data."""
+        return self.get_worklog(worklog_id) is not None
