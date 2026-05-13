@@ -24,28 +24,37 @@ at any time due to UI changes.
 
 ## Quickstart
 
-```bash
-# 1. Install uv (one-time, brings Python with it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+**1. Install uv** (Python comes with it):
 
-# 2. Clone and set up — installs the j2u4 global command
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**2. Install j2u4**:
+
+```bash
 git clone https://github.com/cdds-ab/j2u4.git
 cd j2u4
 ./setup.sh
+```
 
-# 3. Configure interactively (Jira / Tempo / Unit4 tokens with helper
-#    links and hidden token input — writes ~/.config/j2u4/config.json)
+**3. Enter your tokens** (Jira / Tempo / Unit4 — interactive prompts):
+
+```bash
 j2u4 --init
+```
 
-# 4. Verify, then sync today
-j2u4 --check
-j2u4 --day $(date -I)              # dry-run
+**4. Sync today**:
+
+```bash
+j2u4 --check                       # test connections
+j2u4 --day $(date -I)              # preview (no changes)
 j2u4 --day $(date -I) --execute    # actually sync
 ```
 
-Windows users: the setup script needs a Unix shell. Use **WSL**
-(`wsl --install` in an Administrator PowerShell, then run the
-Quickstart inside the Ubuntu terminal).
+> **Windows users:** run `wsl --install` in an Administrator
+> PowerShell first, then execute the four steps inside the Ubuntu
+> terminal.
 
 ## Updating
 

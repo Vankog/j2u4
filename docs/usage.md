@@ -124,7 +124,8 @@ slower.
 5. Reads existing `[WL:]` markers in the current week
 6. Identifies two delete-sets:
    - **Target-day markers** (their worklog id matches today's Tempo worklogs)
-   - **Orphans** (their worklog id no longer exists in this week's Tempo)
+   - **Orphans** (their worklog id is confirmed gone in Tempo — see
+     [Orphan cleanup](#orphan-cleanup-automatic) below)
 7. **Deletes** both sets
 8. **Creates** fresh entries from Tempo's target-day worklogs
 9. **Saves**, then writes the result to `sync_history.log`
@@ -215,9 +216,34 @@ at it so the prompt links there.
 ## Orphan cleanup (automatic)
 
 Each sync compares Unit4's `[WL:]` markers with the worklog ids Tempo
-returns for the whole week. Markers whose worklog no longer exists in
-Tempo are removed automatically. This catches the "I deleted a worklog
-in Tempo, the marker was stuck in Unit4" case.
+returns for the whole week. A marker whose id is *not* in that set is
+not deleted blindly — it could legitimately come from a different ISO
+week that was pushed onto this sheet via `--week` override (e.g. a
+Saturday booked into next week's sheet). The sync therefore confirms
+every suspected orphan with a direct `GET /worklogs/{id}` to Tempo:
+
+- **200** ⇒ worklog still exists, marker is *kept* (printed under
+  `[orphan-cleanup] … outside fetch range but live in Tempo — kept`)
+- **404** ⇒ worklog gone, marker is *deleted* (printed under
+  `[orphan-cleanup] … confirmed gone in Tempo — will be deleted`)
+- **Network/auth error** ⇒ marker is *kept* with a warning, to avoid
+  destructive action on a transient failure
+
+This catches the "I deleted a worklog in Tempo, the marker was stuck
+in Unit4" case without endangering entries that legitimately belong to
+the Unit4 sheet but to a different Tempo ISO week.
+
+## Ticket-key recovery for UNKNOWN markers
+
+When `extract_entries()` scans a Unit4 row whose description sits in
+an `<input>` instead of a `title` attribute (typical for rows that
+were just created in the current session), the ticket-key regex on
+the row text comes up empty and the entry's ticketno is recorded as
+`UNKNOWN`. Before deciding what to do with the marker, the sync looks
+the worklog up in Tempo, then resolves the Jira issue key from
+`issue.id`. The same Tempo response is cached for the orphan-cleanup
+above, so a marker that is both UNKNOWN *and* outside the fetch range
+costs only one Tempo call total.
 
 ## Known limitation: date drift
 

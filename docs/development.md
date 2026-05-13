@@ -20,7 +20,7 @@ j2u4/
 ├── tests/
 │   ├── test_patterns.py          — regex + locale config (51 tests)
 │   ├── test_capture_failure.py   — failure-capture helper (4 tests)
-│   ├── test_per_day_sync.py      — filter + tracking log (7 tests)
+│   ├── test_per_day_sync.py      — filter + tracking log + week derivation/shift (10 tests)
 │   ├── test_mapping_resolver.py  — resolver pipeline (7 tests)
 │   ├── test_ask_for_arbauft.py   — interactive prompt (7 tests)
 │   └── test_jira_connection.py   — manual Jira/Tempo smoke (live)
