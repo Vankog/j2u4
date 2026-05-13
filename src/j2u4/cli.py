@@ -613,7 +613,7 @@ async def sync(
         print()
         print(f"[!] API Error: {e}")
         print()
-        print("    Run 'python sync_tempo_to_unit4.py --check' to diagnose the issue.")
+        print("    Run 'j2u4 --check' to diagnose the issue.")
         return
 
     print(f"    Target day {target_day}: valid={len(valid_worklogs)}, unmapped={len(unmapped_worklogs)}")
@@ -971,16 +971,16 @@ def main():
         epilog="""
 Examples:
     # Check connectivity first
-    python sync_tempo_to_unit4.py --check
+    j2u4 --check
 
     # Dry-run for a specific day
-    python sync_tempo_to_unit4.py --day 2026-04-29
+    j2u4 --day 2026-04-29
 
     # Execute - sync this single day
-    python sync_tempo_to_unit4.py --day 2026-04-29 --execute
+    j2u4 --day 2026-04-29 --execute
 
     # No --day = today (dry-run)
-    python sync_tempo_to_unit4.py
+    j2u4
         """,
     )
 
