@@ -400,15 +400,23 @@ def fetch_and_resolve_worklogs(
     pending_resolution: list[tuple[dict, dict]] = []  # (account, raw_worklog) target-day only
     mapping_dirty = [False]  # 1-element list so the inner loop can mutate it
 
-    # Phase 1: collect everything across the whole week, per account
+    # Phase 1: collect everything across the whole week, per account.
+    # Per-account fetch already retries on 5xx/network inside _get_with_retry,
+    # so anything that reaches this except block has failed every retry.
+    # Silently skipping would risk silent data loss in the delete-and-recreate
+    # phase below — we'd recreate fewer entries than Tempo actually has.
+    # Instead, finish iterating (so all failures get logged in one run) and
+    # abort before any Unit4 changes.
+    failed_accounts: list[tuple[str, str]] = []
     for acc in open_accounts:
         key = acc.get("key")
         if not key:
             continue
         try:
             wls = tempo.fetch_worklogs_by_account(key, week_from, week_to)
-        except Exception as e:
-            print(f"[!] Tempo: skipping account {key}: {e}")
+        except ApiError as e:
+            print(f"[!] Tempo: account {key} failed after retries: {e}")
+            failed_accounts.append((key, str(e)))
             continue
         for wl in wls:
             author_id = (wl.get("author") or {}).get("accountId")
@@ -417,6 +425,14 @@ def fetch_and_resolve_worklogs(
             week_worklog_ids.add(wl["tempoWorklogId"])
             if wl["startDate"] == target_day:
                 pending_resolution.append((acc, wl))
+
+    if failed_accounts:
+        keys = ", ".join(k for k, _ in failed_accounts)
+        raise ApiError(
+            f"Tempo: {len(failed_accounts)} account(s) unreachable after retries "
+            f"({keys}). Aborting before Unit4 changes to avoid silent data loss. "
+            "Re-run once Tempo is back up."
+        )
 
     if not pending_resolution:
         return [], [], week_worklog_ids

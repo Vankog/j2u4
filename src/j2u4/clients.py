@@ -1,8 +1,16 @@
 """API clients for Jira and Tempo."""
 
+import time
+
 import requests
 
 ACCOUNT_FIELD = "customfield_10048"
+
+# Transient HTTP statuses worth retrying. 4xx is deliberately excluded —
+# auth/permission/not-found errors don't fix themselves on retry.
+_TRANSIENT_STATUS = {500, 502, 503, 504}
+_RETRY_ATTEMPTS = 3
+_BACKOFF_SECONDS = (1, 3)  # sleeps between attempts 1->2 and 2->3
 
 
 class ApiError(Exception):
@@ -30,6 +38,65 @@ def _handle_api_error(response: requests.Response, service: str) -> str:
     return messages.get(status, f"{service}: HTTP {status} - {response.reason}")
 
 
+def _get_with_retry(
+    url: str,
+    service: str,
+    *,
+    auth=None,
+    headers: dict | None = None,
+    params: dict | None = None,
+    timeout: int = 30,
+    _sleep=time.sleep,
+) -> requests.Response:
+    """GET with retry on transient failures (5xx, connection, timeout).
+
+    Retries up to _RETRY_ATTEMPTS total with exponential backoff. Returns
+    the Response on success OR on a final non-transient status (2xx/3xx/4xx
+    are returned immediately so the caller can decide what to do with
+    them). Raises ApiError only when every attempt failed at the network
+    level (connection/timeout) — a 5xx on the last attempt is returned so
+    the caller can produce a status-specific error message.
+
+    The _sleep parameter is injectable for tests; production code uses
+    time.sleep.
+    """
+    last_response: requests.Response | None = None
+    last_network_error: Exception | None = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            last_response = requests.get(
+                url,
+                auth=auth,
+                headers=headers,
+                params=params,
+                timeout=timeout,
+            )
+            last_network_error = None
+        except requests.exceptions.ConnectionError as e:
+            last_network_error = e
+            last_response = None
+        except requests.exceptions.Timeout as e:
+            last_network_error = e
+            last_response = None
+        else:
+            if last_response.status_code not in _TRANSIENT_STATUS:
+                return last_response
+        if attempt < _RETRY_ATTEMPTS - 1:
+            _sleep(_BACKOFF_SECONDS[attempt])
+
+    if last_response is not None:
+        # Final attempt got a transient 5xx — hand it back so the caller
+        # can build a status-specific ApiError via _handle_api_error.
+        return last_response
+    if isinstance(last_network_error, requests.exceptions.Timeout):
+        raise ApiError(
+            f"{service}: Connection timed out after {_RETRY_ATTEMPTS} attempts."
+        )
+    raise ApiError(
+        f"{service}: Cannot connect after {_RETRY_ATTEMPTS} attempts. Check your network!"
+    )
+
+
 class JiraClient:
     """Client for Jira REST API."""
 
@@ -40,18 +107,13 @@ class JiraClient:
 
     def get_my_account_id(self) -> str:
         """Get the current user's Jira account ID."""
-        try:
-            r = requests.get(
-                f"{self.base_url}/rest/api/3/myself",
-                auth=(self.email, self.token),
-                headers={"Accept": "application/json"},
-                timeout=10,
-            )
-        except requests.exceptions.ConnectionError:
-            raise ApiError(f"Jira: Cannot connect to {self.base_url}. Check your network!")
-        except requests.exceptions.Timeout:
-            raise ApiError("Jira: Connection timed out. The server may be slow.")
-
+        r = _get_with_retry(
+            f"{self.base_url}/rest/api/3/myself",
+            "Jira",
+            auth=(self.email, self.token),
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
         if not r.ok:
             raise ApiError(_handle_api_error(r, "Jira"), r.status_code)
         return r.json()["accountId"]
@@ -60,18 +122,20 @@ class JiraClient:
         """Fetch issue details (key, summary, account field).
 
         Best-effort: returns None on any non-200 (404 = no permission to read
-        this issue, common for cross-team tickets). Callers must handle None
-        as "summary unavailable" without crashing.
+        this issue, common for cross-team tickets) and on persistent network
+        failures. Callers must handle None as "summary unavailable" without
+        crashing.
         """
         try:
-            r = requests.get(
+            r = _get_with_retry(
                 f"{self.base_url}/rest/api/3/issue/{issue_id}",
+                "Jira",
                 auth=(self.email, self.token),
                 headers={"Accept": "application/json"},
                 params={"fields": f"key,summary,{ACCOUNT_FIELD}"},
                 timeout=10,
             )
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        except ApiError:
             return None
         if r.status_code == 200:
             return r.json()
@@ -88,21 +152,16 @@ class TempoClient:
         """GET a paginated Tempo endpoint, return concatenated results."""
         results: list[dict] = []
         while url:
-            try:
-                r = requests.get(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {self.token}",
-                        "Accept": "application/json",
-                    },
-                    params=params,
-                    timeout=30,
-                )
-            except requests.exceptions.ConnectionError:
-                raise ApiError("Tempo: Cannot connect to api.tempo.io. Check your network!")
-            except requests.exceptions.Timeout:
-                raise ApiError("Tempo: Connection timed out. The server may be slow.")
-
+            r = _get_with_retry(
+                url,
+                "Tempo",
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Accept": "application/json",
+                },
+                params=params,
+                timeout=30,
+            )
             if not r.ok:
                 raise ApiError(_handle_api_error(r, "Tempo"), r.status_code)
             data = r.json()
@@ -153,19 +212,15 @@ class TempoClient:
             caller can decide to abort instead of mistakenly treating
             a transient error as a missing worklog.
         """
-        try:
-            r = requests.get(
-                f"https://api.tempo.io/4/worklogs/{worklog_id}",
-                headers={
-                    "Authorization": f"Bearer {self.token}",
-                    "Accept": "application/json",
-                },
-                timeout=15,
-            )
-        except requests.exceptions.ConnectionError:
-            raise ApiError("Tempo: Cannot connect to api.tempo.io. Check your network!")
-        except requests.exceptions.Timeout:
-            raise ApiError("Tempo: Connection timed out.")
+        r = _get_with_retry(
+            f"https://api.tempo.io/4/worklogs/{worklog_id}",
+            "Tempo",
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "application/json",
+            },
+            timeout=15,
+        )
         if r.status_code == 200:
             return r.json()
         if r.status_code == 404:
