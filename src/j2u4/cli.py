@@ -558,6 +558,7 @@ async def sync(
     execute: bool,
     config_override: dict | None = None,
     slow_factor: int = 1,
+    headless: bool = False,
 ):
     """Single-day Tempo→Unit4 sync. ISO week is derived from target_day."""
     dry_run = not execute
@@ -672,7 +673,7 @@ async def sync(
     print()
     print("[4] Connecting to Unit4...")
 
-    async with Unit4Browser(config, slow_factor=slow_factor) as unit4:
+    async with Unit4Browser(config, headless=headless, slow_factor=slow_factor) as unit4:
         frame = await unit4.navigate_to_zeiterfassung()
 
         # Set week
@@ -1039,6 +1040,13 @@ Examples:
         "timeouts by N. Use 2/4/6 when Unit4 is under load and the "
         "default 10s click timeouts start failing.",
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run the Unit4 browser headless (no window). Use on WSL "
+        "without WSLg, on servers, or in CI. Captured videos in the "
+        "debug capture_dir let you replay what happened.",
+    )
 
     args = parser.parse_args()
 
@@ -1118,7 +1126,14 @@ Examples:
         week = derived
 
     asyncio.run(
-        sync(week, target_day, args.execute, config_override=config, slow_factor=args.slow)
+        sync(
+            week,
+            target_day,
+            args.execute,
+            config_override=config,
+            slow_factor=args.slow,
+            headless=args.headless,
+        )
     )
     return 0
 

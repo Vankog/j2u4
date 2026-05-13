@@ -157,10 +157,14 @@ class Unit4Browser:
 
     async def __aenter__(self) -> "Unit4Browser":
         self._playwright = await async_playwright().start()
+        # --no-sandbox makes Chromium launch work in WSL/containers where
+        # user namespaces are restricted. Headless mode doesn't need a
+        # sandbox for security anyway. --start-maximized was a leftover
+        # GUI-only arg that meant nothing for our automation.
         self._browser = await self._playwright.chromium.launch(
             headless=self.headless,
             slow_mo=self.slow_mo,
-            args=["--start-maximized"],
+            args=["--no-sandbox"],
         )
 
         # Capture run dir (created lazily even if no failures occur, because
