@@ -12,6 +12,22 @@
 - Jira token: Check it's not expired at [Atlassian Account](https://id.atlassian.com/manage-profile/security/api-tokens)
 - Tempo token: Regenerate in Tempo Settings > API Integration
 
+### "Tempo: N account(s) unreachable after retries"
+Tempo returned 5xx (or connection failures) for one or more accounts even
+after the built-in retries (3 attempts with 1s/3s backoff per call). The
+sync aborts **before any Unit4 changes** to avoid silent data loss — if
+we skipped the failed account, its worklogs would be invisible to the
+delete-and-recreate phase and you'd end up missing entries in Unit4.
+
+What to do:
+- Most of the time this is a transient Tempo brownout. Wait a minute,
+  then re-run `j2u4 --day YYYY-MM-DD --execute`.
+- If it persists for the same account: check Tempo's status page and
+  whether the account is in an unusual state (closed/archived during
+  the sync).
+- Auth/permission issues surface as `401`/`403` immediately (no retry)
+  via the "Authentication failed" section above, not here.
+
 ### "Cannot connect to Unit4"
 - Make sure you're connected to VPN (if required)
 - Check the URL in `config.json` is correct

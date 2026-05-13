@@ -130,6 +130,15 @@ slower.
 8. **Creates** fresh entries from Tempo's target-day worklogs
 9. **Saves**, then writes the result to `sync_history.log`
 
+### Behaviour on Tempo outages
+
+Step 2 calls Tempo once per open account. Each call retries up to 3
+times on 5xx / connection / timeout (backoff 1s, 3s) before giving up.
+If any account still fails after retries, the sync **aborts before
+reaching step 7** — silently skipping a failed account would risk
+losing real worklogs in the delete-and-recreate flow. Auth errors
+(401/403) are not retried; they surface immediately for you to fix.
+
 ## Mapping resolver (3 stages)
 
 For each Tempo account that appears in your worklogs, the resolver tries
