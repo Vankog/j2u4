@@ -4,6 +4,8 @@
 # Usage:
 #   ./setup.sh             — full setup (deps, Chromium, config, mapping, j2u4 install)
 #   ./setup.sh --upgrade   — refresh deps + j2u4 binary only (skip config/mapping bootstrap)
+#   ./setup.sh --no-deps   — skip the Linux system-library install for Chromium
+#                            (use when you already have libatk/libnss3/... or aren't on apt)
 #   ./setup.sh --help      — show this message
 
 set -e
@@ -12,13 +14,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 MODE="install"
+SKIP_DEPS=false
 for arg in "$@"; do
     case "$arg" in
         --upgrade)
             MODE="upgrade"
             ;;
+        --no-deps)
+            SKIP_DEPS=true
+            ;;
         --help|-h)
-            sed -n '2,7p' "$0" | sed 's/^# //;s/^#//'
+            sed -n '2,9p' "$0" | sed 's/^# //;s/^#//'
             exit 0
             ;;
         *)
@@ -166,6 +172,41 @@ if [ -x "$TOOL_PLAYWRIGHT" ]; then
 else
     # Fallback for older uv layouts
     uv tool run --from j2u4 playwright install chromium
+fi
+
+# Step [6] System libraries for Chromium (Linux only). chrome-headless-shell
+# needs libatk-1.0, libnss3, libxkbcommon0, ... — not bundled with the
+# Playwright download. Skipped on macOS (deps come with Chromium) and
+# Windows (this script only runs under bash anyway).
+if [[ "$OSTYPE" == "linux-gnu"* ]] && [ "$SKIP_DEPS" != true ]; then
+    echo
+    echo "[6] Installing Chromium system libraries (apt)..."
+    echo "    Without these, the first sync crashes with TargetClosedError."
+    echo "    Pass --no-deps to skip (you'll need libatk1.0-0 libnss3 ... yourself)."
+    DEPS_PLAYWRIGHT="$TOOL_PLAYWRIGHT"
+    if [ ! -x "$DEPS_PLAYWRIGHT" ]; then
+        # Fall back to the local .venv playwright if the tool one isn't there
+        DEPS_PLAYWRIGHT="$(command -v playwright || true)"
+    fi
+    if [ -z "$DEPS_PLAYWRIGHT" ]; then
+        echo "    [skip] no playwright binary found — install system libs manually:"
+        echo "      sudo apt-get install -y libatk1.0-0 libatk-bridge2.0-0 libnss3 \\"
+        echo "        libnspr4 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \\"
+        echo "        libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2"
+    elif [ "$(id -u)" = "0" ]; then
+        # Already root — no sudo prefix needed (e.g. Docker, CI containers)
+        "$DEPS_PLAYWRIGHT" install-deps chromium || {
+            echo "    [!] install-deps failed. Install the libs manually (see above) and re-run."
+        }
+    elif command -v sudo &> /dev/null; then
+        sudo "$DEPS_PLAYWRIGHT" install-deps chromium || {
+            echo "    [!] install-deps failed. j2u4 will install, but the first sync will"
+            echo "        crash with TargetClosedError until you install the libs manually."
+        }
+    else
+        echo "    [skip] sudo not found and not running as root."
+        echo "    Run as root: $DEPS_PLAYWRIGHT install-deps chromium"
+    fi
 fi
 
 echo

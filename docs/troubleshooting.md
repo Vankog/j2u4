@@ -16,6 +16,16 @@
 - Make sure you're connected to VPN (if required)
 - Check the URL in `config.json` is correct
 
+### `TargetClosedError: BrowserType.launch` on Linux
+- Chromium (chrome-headless-shell) can't start because system libs are missing
+  (typically `libatk-1.0.so.0`, `libnss3`, `libxkbcommon0`, …). Verify with:
+  `<playwright-cache>/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell --version`
+  — if it answers `error while loading shared libraries: …`, that's the cause.
+- Fix: re-run `./setup.sh` (step `[6]` installs the libs via apt), or do it
+  manually: `sudo "$(uv tool dir)/j2u4/bin/playwright" install-deps chromium`
+- On non-Debian/Ubuntu distros `playwright install-deps` won't help — install
+  the libs through your package manager directly.
+
 ### "Page not loaded" / Add button not found
 - The script waits for the page to load, but Unit4 can be slow
 - Try `--slow 2` (or higher) to give Unit4 more breathing room
