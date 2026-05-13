@@ -27,6 +27,29 @@ If you fill in `config.json` by hand instead of `--init`:
 - **Tempo API Token**: Go to Tempo > Settings > API Integration
   `https://<YOUR-ORG>.atlassian.net/plugins/servlet/ac/io.tempo.jira/tempo-app#!/configuration/api-integration`
 
+### Required token permissions
+
+Both tokens are **read-only** — j2u4 never writes to Jira or Tempo.
+
+**Jira** — the Atlassian API token has no scope picker; it inherits your
+account's Jira permissions. You need:
+
+- **Browse Projects** on every Jira project whose tickets you book worklogs against
+
+**Tempo** — the token has explicit scopes when you create it. Tick exactly:
+
+- **View worklogs** — needed for `/4/worklogs/*` endpoints
+- **View accounts** — needed for `/4/accounts` (the Tempo account/cost-center list j2u4 uses to map worklogs)
+
+> Watch out: **`View accounts` is not the same scope as `View projects`.**
+> Tempo "accounts" are cost-centers, "projects" are Jira projects. A token
+> with only `View worklogs` + `View projects` will fail the sync with
+> `403 Access denied` at the account-listing step.
+
+All other scopes (`Manage worklogs`, `Manage accounts`, plans, teams, …)
+can stay disabled. Verify the token setup with `j2u4 --check`, which
+tests both Tempo scopes separately and tells you which one is missing.
+
 ## `config.json` — full structure
 
 Only the `jira`, `tempo`, and `unit4` sections are required. Everything

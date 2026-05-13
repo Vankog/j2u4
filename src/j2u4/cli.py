@@ -105,6 +105,9 @@ def interactive_init() -> int:
     print("[1/4] Jira (Atlassian Cloud)")
     print("      Create an API token at:")
     print("        https://id.atlassian.com/manage-profile/security/api-tokens")
+    print("      Required Jira permissions (token has no scopes — inherits user rights):")
+    print("        - Browse Projects on every project whose tickets you book")
+    print("      Read-only. No write/admin rights needed.")
     print()
     jira = existing.get("jira") or {}
     jira_url = _ask(
@@ -120,6 +123,10 @@ def interactive_init() -> int:
     print("[2/4] Tempo Timesheets")
     print("      Create a token at:")
     print(f"        {jira_url.rstrip('/')}/plugins/servlet/ac/io.tempo.jira/tempo-app#!/configuration/api-integration")
+    print("      Required Tempo scopes (both read-only):")
+    print("        - View worklogs")
+    print("        - View accounts   (NOT 'View projects' — different scope!)")
+    print("      No 'Manage' scopes needed — j2u4 never writes to Tempo.")
     print()
     tempo_token = _ask_secret(
         "  Tempo API token (input hidden)", (existing.get("tempo") or {}).get("api_token")
@@ -258,24 +265,46 @@ def check_connectivity(config: dict) -> bool:
         print(f"    Unexpected error: {e}")
         all_ok = False
 
-    # Check Tempo
-    print("[2] Tempo API...", end=" ", flush=True)
+    # Check Tempo — two sub-tests, one per required scope.
+    # The sync hits both /4/worklogs/* (View worklogs) and /4/accounts
+    # (View accounts), so a token with only one scope passes one sub-test
+    # and fails the other. Reporting them separately tells the user
+    # exactly which scope to add when re-creating the token.
+    print("[2] Tempo API")
+    tempo = TempoClient(config)
+
+    print("    [a] View worklogs scope...", end=" ", flush=True)
     try:
-        tempo = TempoClient(config)
-        # Just try to fetch worklogs for today to test auth
         jira = JiraClient(config)
         account_id = jira.get_my_account_id()
-        from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
         tempo.fetch_worklogs(account_id, today, today)
         print("OK")
     except ApiError as e:
-        print(f"FAILED")
-        print(f"    {e}")
+        print("FAILED")
+        print(f"        {e}")
+        if e.status_code in (401, 403):
+            print("        → Re-create the Tempo token with the 'View worklogs' scope.")
         all_ok = False
     except Exception as e:
-        print(f"FAILED")
-        print(f"    Unexpected error: {e}")
+        print("FAILED")
+        print(f"        Unexpected error: {e}")
+        all_ok = False
+
+    print("    [b] View accounts scope...", end=" ", flush=True)
+    try:
+        tempo.fetch_accounts()
+        print("OK")
+    except ApiError as e:
+        print("FAILED")
+        print(f"        {e}")
+        if e.status_code in (401, 403):
+            print("        → Re-create the Tempo token with the 'View accounts' scope.")
+            print("        → 'View projects' is NOT the same scope and won't work.")
+        all_ok = False
+    except Exception as e:
+        print("FAILED")
+        print(f"        Unexpected error: {e}")
         all_ok = False
 
     # Check Unit4 URL
