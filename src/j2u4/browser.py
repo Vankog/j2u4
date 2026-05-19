@@ -11,7 +11,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import Error as PlaywrightError, expect
 from playwright.async_api import Frame, Page, Request, async_playwright, BrowserContext
 
 from j2u4.models import TempoWorklog, Unit4Entry
@@ -1054,42 +1054,10 @@ class Unit4Browser:
         if any_fail:
             print(f"    [!] UNVOLLSTÄNDIG: {worklog.arbauft} | {text} | {worklog.issue_key} | {day_name}: {hours_str}h")
 
-        # Click OK to close dialog. Trace evidence: s108_apply matches an
-        # enabled+visible button that nonetheless fails actionability checks
-        # (likely the inline grid OK behind the dialog overlay). The only
-        # selector that reliably hits the active dialog's OK is the ARIA
-        # role-based one. Use that first; fall back to _click_button if the
-        # role lookup fails.
-        ok_clicked = False
-        try:
-            await frame.get_by_role("button", name="OK").first.click(timeout=2000)
-            ok_clicked = True
-        except Exception:
-            pass
-        if not ok_clicked:
-            ok_clicked = await self._click_button(frame, "OK")
-        if not ok_clicked:
-            await self.page.keyboard.press("Enter")
-            await asyncio.sleep(1)
-            for locale in ("de", "en"):
-                if await self._click_button(frame, LOCALE_STRINGS[locale]["cancel"]):
-                    break
-            await self._click_button(frame, "OK")
-            print("FAILED (OK) - dialog closed")
-            return False
-
-        await asyncio.sleep(1)
-
-        # Wait for dialog to close
-        add_btn = frame.locator("button[id$='_newButton']").first
-        for _ in range(10):
-            if await add_btn.count() > 0 and await add_btn.is_visible(timeout=500):
-                break
-            await asyncio.sleep(0.5)
-            await self._click_button(frame, "OK")
-            for locale in ("de", "en"):
-                if await self._click_button(frame, LOCALE_STRINGS[locale]["cancel"]):
-                    break
+        # Click OK to close dialog 
+        ok_btn = frame.locator("#b__dialog [onclick*='closeZoom']").describe("Time details modal OK button")
+        await ok_btn.click()
+        await expect(frame.locator("#b__dialog")).to_be_hidden()
 
         print("OK")
         return True
@@ -1232,6 +1200,9 @@ class Unit4Browser:
                         )
                     await self.page.keyboard.press("Tab")
                     await asyncio.sleep(0.5)
+                    apply_btn = frame.locator("#b__dialog button[tg_id='apply']")
+                    await apply_btn.click()
+                    await expect(apply_btn).to_be_hidden()
                     print("OK")
                     return True
                 else:
