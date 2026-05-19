@@ -1366,10 +1366,10 @@ class Unit4Browser:
             saved = True
 
         if saved:
-            await asyncio.sleep(2)
-            await self._click_button(frame, "OK")
-            await self._click_button(self.page, "OK")
-            await asyncio.sleep(1)
+            ok_btn = self.page.locator("[data-u4id*='success_OK']").describe("Save success OK button")
+            await expect(ok_btn).to_be_visible()
+            await ok_btn.click()
+            await expect(ok_btn).to_be_hidden()
 
         return saved
 
