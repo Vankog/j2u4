@@ -816,7 +816,7 @@ class Unit4Browser:
                 for locale in ("de", "en"):
                     if await self._click_button(frame, LOCALE_STRINGS[locale]["confirm_yes"]):
                         break
-                await self._click_button(frame, "OK")
+
                 await asyncio.sleep(2)
                 print("deleted...", end=" ", flush=True)
 
