@@ -979,7 +979,7 @@ class Unit4Browser:
         # the dialog overlays the grid input.
         print("filling ArbAuft...", end=" ", flush=True)
         arbauft_ok = await self._fill_field_by_id(
-            frame, "input[id*='1678_Editor']:not([disabled])", worklog.arbauft
+            frame, "#b__dialog input[id*='1678_Editor']:not([disabled])", worklog.arbauft
         )
         print("OK" if arbauft_ok else "FAIL", end=" | ", flush=True)
 
@@ -994,7 +994,7 @@ class Unit4Browser:
         # the still-default selection (NOTEMPO) gets accepted.
         async def _try_aktivitaet() -> bool:
             try:
-                akt = frame.locator("input[id*='1680_Editor']:not([disabled])").first
+                akt = frame.locator("#b__dialog input[id*='1680_Editor']:not([disabled])").first
                 if await akt.count() == 0:
                     return False
                 await akt.click(timeout=self._timeout)
@@ -1012,13 +1012,13 @@ class Unit4Browser:
 
         print("Text...", end=" ", flush=True)
         text_ok = await self._fill_field_by_id(
-            frame, "input[id*='description_i']:not([disabled])", text
+            frame, "#b__dialog input[id*='description_i']:not([disabled])", text
         )
         print("OK" if text_ok else "FAIL", end=" | ", flush=True)
 
         print("Ticketno...", end=" ", flush=True)
         ticketno_ok = await self._fill_field_by_id(
-            frame, "input[id*='1688_Editor']:not([disabled])", worklog.issue_key
+            frame, "#b__dialog input[id*='1688_Editor']:not([disabled])", worklog.issue_key
         )
         print("OK" if ticketno_ok else "FAIL")
 
@@ -1027,20 +1027,20 @@ class Unit4Browser:
             await asyncio.sleep(1)
             if not aktivitaet_ok:
                 # Re-wait in case the field was still pending enable.
-                await self._wait_for_enabled(frame, "input[id*='1680_Editor']", timeout_s=4.0)
+                await self._wait_for_enabled(frame, "#b__dialog input[id*='1680_Editor']", timeout_s=4.0)
                 print("    retry Aktivität...", end=" ", flush=True)
                 aktivitaet_ok = await _try_aktivitaet()
                 print("OK" if aktivitaet_ok else "FAIL")
             if not text_ok:
                 print("    retry Text...", end=" ", flush=True)
                 text_ok = await self._fill_field_by_id(
-                    frame, "input[id*='description_i']:not([disabled])", text
+                    frame, "#b__dialog input[id*='description_i']:not([disabled])", text
                 )
                 print("OK" if text_ok else "FAIL")
             if not ticketno_ok:
                 print("    retry Ticketno...", end=" ", flush=True)
                 ticketno_ok = await self._fill_field_by_id(
-                    frame, "input[id*='1688_Editor']:not([disabled])", worklog.issue_key
+                    frame, "#b__dialog input[id*='1688_Editor']:not([disabled])", worklog.issue_key
                 )
                 print("OK" if ticketno_ok else "FAIL")
 
