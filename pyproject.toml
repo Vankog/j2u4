@@ -4,7 +4,8 @@ version = "0.3.0.dev0"
 description = "Sync Tempo worklogs to Unit4 Zeiterfassung via Playwright browser automation"
 requires-python = ">=3.11"
 dependencies = [
-    "playwright>=1.40.0",
+    # Playwright 1.60.0 / chromium-1223 hangs Unit4 networkidle wait — see #11
+    "playwright>=1.40.0,<1.60.0",
     "requests>=2.31.0",
 ]
 
