@@ -400,7 +400,9 @@ class Unit4Browser:
         """Login to Unit4 and navigate to Zeiterfassung."""
         print("[*] Opening Unit4...")
         await self.page.goto(self.unit4_url)
-        await self.page.wait_for_load_state("networkidle")
+        # `networkidle` never settles on Unit4 (persistent telemetry/long-polling);
+        # `domcontentloaded` is what reliably fires (see issue #11).
+        await self.page.wait_for_load_state("domcontentloaded")
         await asyncio.sleep(2)
 
         if not await self.check_session_valid():
@@ -436,9 +438,10 @@ class Unit4Browser:
             except EOFError:
                 pass
 
-        # Wait for page to fully load
+        # Wait for page to fully load. See line 403 comment — `networkidle`
+        # does not settle on Unit4. Subsequent frame-retry loop covers timing.
         print("waiting...", end=" ", flush=True)
-        await self.page.wait_for_load_state("networkidle")
+        await self.page.wait_for_load_state("domcontentloaded")
 
         # Wait until week/period input field is visible
         frame = None
