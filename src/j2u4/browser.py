@@ -454,30 +454,46 @@ class Unit4Browser:
             print("    Session saved for future use.")
             await asyncio.sleep(2)
 
-        # Navigate to Zeiterfassung. Race DE and EN menu text against each
-        # other — the locale active in the user's Unit4 wins. Sequential
-        # per-locale waits would force EN users through a full DE timeout
-        # on every run.
+        # Navigate to Zeiterfassung. True parallel race via asyncio — the
+        # previous Locator.or_().first approach turned out to evaluate
+        # sequentially in practice (DE-absent EN users still ate the full
+        # 30s DE timeout). Spawn one wait_for task per locale and let the
+        # first that succeeds win; cancel the loser.
         print("[*] Opening Zeiterfassung...", flush=True)
         de_text = LOCALE_STRINGS["de"]["menu_text"]
         en_text = LOCALE_STRINGS["en"]["menu_text"]
-        menu = self.page.get_by_text(de_text, exact=True).or_(
-            self.page.get_by_text(en_text, exact=True)
-        ).first
-        print(f"    waiting for '{de_text}' or '{en_text}'...", end=" ", flush=True)
-        clicked = False
-        try:
-            await menu.wait_for(state="visible", timeout=30000)
+
+        async def _wait_locale(locale_name: str, text: str):
+            loc = self.page.get_by_text(text, exact=True).first
             try:
-                matched = (await menu.inner_text()).strip()
-                print(f"matched {matched!r}, clicking...", end=" ", flush=True)
+                await loc.wait_for(state="visible", timeout=30000)
+                return locale_name, loc
             except Exception:
-                print("visible, clicking...", end=" ", flush=True)
-            await menu.click(timeout=5000)
-            print("clicked")
-            clicked = True
-        except Exception as e:
-            print(f"miss ({type(e).__name__})")
+                return None
+
+        print(f"    racing DE='{de_text}' vs EN='{en_text}'...", end=" ", flush=True)
+        clicked = False
+        tasks = [
+            asyncio.create_task(_wait_locale("de", de_text)),
+            asyncio.create_task(_wait_locale("en", en_text)),
+        ]
+        try:
+            for finished in asyncio.as_completed(tasks):
+                result = await finished
+                if result is None:
+                    continue  # this locale timed out; the other may still resolve
+                locale_name, winner_loc = result
+                print(f"{locale_name} wins, clicking...", end=" ", flush=True)
+                await winner_loc.click(timeout=5000)
+                print("clicked")
+                clicked = True
+                break
+            if not clicked:
+                print("miss (both locales timed out)")
+        finally:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
         if not clicked:
             print("[!] Navigate to Zeiterfassung manually, then ENTER...")
             try:
