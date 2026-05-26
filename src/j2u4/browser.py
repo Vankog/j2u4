@@ -425,15 +425,16 @@ class Unit4Browser:
     async def navigate_to_zeiterfassung(self) -> Frame:
         """Login to Unit4 and navigate to Zeiterfassung."""
         print("[*] Opening Unit4...")
-        await self.page.goto(self.unit4_url)
-        # `networkidle` never settles on Unit4 (persistent telemetry/long-polling).
-        # `domcontentloaded` fires but is too early — SPA shell hasn't rendered
-        # the side-menu yet. We tolerate failure here and rely on explicit
-        # element waits below (see issue #11).
+        # page.goto's default wait_until="load" never fires on Unit4 — neither
+        # does "networkidle" (persistent telemetry/long-polling). Only "commit"
+        # and "domcontentloaded" reliably fire (see issue #11). All downstream
+        # readiness checks use explicit element waits.
         try:
-            await self.page.wait_for_load_state("domcontentloaded", timeout=15000)
+            await self.page.goto(
+                self.unit4_url, wait_until="domcontentloaded", timeout=30000
+            )
         except Exception as e:
-            print(f"[!] wait_for_load_state(domcontentloaded) failed: {e!r} — continuing")
+            print(f"[!] page.goto returned: {e!r} — continuing, page may still load")
         await asyncio.sleep(2)
 
         print(f"    page url={self.page.url}")
