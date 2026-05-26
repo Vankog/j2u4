@@ -454,24 +454,30 @@ class Unit4Browser:
             print("    Session saved for future use.")
             await asyncio.sleep(2)
 
-        # Navigate to Zeiterfassung. Try both DE and EN menu text — explicit
-        # per-locale wait_for tolerates slow SPA hydration.
+        # Navigate to Zeiterfassung. Race DE and EN menu text against each
+        # other — the locale active in the user's Unit4 wins. Sequential
+        # per-locale waits would force EN users through a full DE timeout
+        # on every run.
         print("[*] Opening Zeiterfassung...", flush=True)
+        de_text = LOCALE_STRINGS["de"]["menu_text"]
+        en_text = LOCALE_STRINGS["en"]["menu_text"]
+        menu = self.page.get_by_text(de_text, exact=True).or_(
+            self.page.get_by_text(en_text, exact=True)
+        ).first
+        print(f"    waiting for '{de_text}' or '{en_text}'...", end=" ", flush=True)
         clicked = False
-        for locale in ("de", "en"):
-            if clicked:
-                break
-            menu_text = LOCALE_STRINGS[locale]["menu_text"]
-            menu = self.page.get_by_text(menu_text, exact=True).first
-            print(f"    waiting for '{menu_text}' (locale={locale})...", end=" ", flush=True)
+        try:
+            await menu.wait_for(state="visible", timeout=30000)
             try:
-                await menu.wait_for(state="visible", timeout=30000)
+                matched = (await menu.inner_text()).strip()
+                print(f"matched {matched!r}, clicking...", end=" ", flush=True)
+            except Exception:
                 print("visible, clicking...", end=" ", flush=True)
-                await menu.click(timeout=5000)
-                print("clicked")
-                clicked = True
-            except Exception as e:
-                print(f"miss ({type(e).__name__})")
+            await menu.click(timeout=5000)
+            print("clicked")
+            clicked = True
+        except Exception as e:
+            print(f"miss ({type(e).__name__})")
         if not clicked:
             print("[!] Navigate to Zeiterfassung manually, then ENTER...")
             try:
