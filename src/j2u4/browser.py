@@ -464,9 +464,13 @@ class Unit4Browser:
         en_text = LOCALE_STRINGS["en"]["menu_text"]
 
         async def _wait_locale(locale_name: str, text: str):
+            # 5s is plenty here: by the time this race starts, the page is
+            # already past goto + 2s sleep + session check. If the locale's
+            # menu text isn't materialised by then, it's the wrong locale
+            # and no amount of extra waiting will help.
             loc = self.page.get_by_text(text, exact=True).first
             try:
-                await loc.wait_for(state="visible", timeout=30000)
+                await loc.wait_for(state="visible", timeout=5000)
                 return locale_name, loc
             except Exception:
                 return None
