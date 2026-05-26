@@ -415,7 +415,9 @@ class Unit4Browser:
             print("    Session saved for future use.")
             await asyncio.sleep(2)
 
-        # Navigate to Zeiterfassung (try both DE and EN menu text)
+        # Navigate to Zeiterfassung (try both DE and EN menu text). Since we
+        # use domcontentloaded (see line 403), the side-menu may not be rendered
+        # yet — wait explicitly per locale before clicking.
         print("[*] Opening Zeiterfassung...", end=" ", flush=True)
         clicked = False
         for locale in ("de", "en"):
@@ -424,10 +426,10 @@ class Unit4Browser:
             try:
                 menu_text = LOCALE_STRINGS[locale]["menu_text"]
                 menu = self.page.get_by_text(menu_text, exact=True).first
-                if await menu.count() > 0:
-                    await menu.click(timeout=5000)
-                    print("clicked...", end=" ", flush=True)
-                    clicked = True
+                await menu.wait_for(state="visible", timeout=10000)
+                await menu.click(timeout=5000)
+                print("clicked...", end=" ", flush=True)
+                clicked = True
             except Exception:
                 continue
         if not clicked:
