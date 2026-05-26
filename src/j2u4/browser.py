@@ -343,12 +343,38 @@ class Unit4Browser:
             self._chunk_active = False
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        # Stop tracing first (without saving — chunks were saved on failure).
+        # If we are exiting on an unhandled exception (anything that
+        # propagated past the wrapped chunks — typically a failure in
+        # navigate_to_zeiterfassung), save the full trace so the navigation
+        # path is still diagnosable. Otherwise stop tracing without saving:
+        # chunks already wrote what they needed.
+        unhandled = (
+            exc_type is not None
+            and self._tracing_active
+            and self._capture_run_dir is not None
+        )
         if self._tracing_active and self._context:
             try:
-                await self._context.tracing.stop()
-            except Exception:
-                pass
+                if unhandled:
+                    trace_path = self._capture_run_dir / "trace_unhandled.zip"
+                    await self._context.tracing.stop(path=str(trace_path))
+                    meta = {
+                        "step": "UNHANDLED",
+                        "timestamp": datetime.now().strftime("%Y-%m-%dT%H-%M-%S"),
+                        "exception": f"{exc_type.__name__}: {exc_val}",
+                        "page_url": self._page.url if self._page else None,
+                    }
+                    (self._capture_run_dir / "context.json").write_text(
+                        json.dumps(meta, indent=2)
+                    )
+                    # Mirror chunk semantics so the cleanup heuristic below
+                    # keeps the run dir.
+                    self._capture_count += 1
+                    print(f"[!] unhandled exception trace saved: {trace_path}")
+                else:
+                    await self._context.tracing.stop()
+            except Exception as e:
+                print(f"[!] tracing stop failed: {e}")
             self._tracing_active = False
 
         # Persist refreshed cookies before closing the browser. Unit4 rotates
