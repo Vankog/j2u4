@@ -400,10 +400,22 @@ class Unit4Browser:
         """Login to Unit4 and navigate to Zeiterfassung."""
         print("[*] Opening Unit4...")
         await self.page.goto(self.unit4_url)
-        # `networkidle` never settles on Unit4 (persistent telemetry/long-polling);
-        # `domcontentloaded` is what reliably fires (see issue #11).
-        await self.page.wait_for_load_state("domcontentloaded")
+        # `networkidle` never settles on Unit4 (persistent telemetry/long-polling).
+        # `domcontentloaded` fires but is too early — SPA shell hasn't rendered
+        # the side-menu yet. We tolerate failure here and rely on explicit
+        # element waits below (see issue #11).
+        try:
+            await self.page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception as e:
+            print(f"[!] wait_for_load_state(domcontentloaded) failed: {e!r} — continuing")
         await asyncio.sleep(2)
+
+        print(f"    page url={self.page.url}")
+        try:
+            title = await self.page.title()
+            print(f"    page title={title!r}")
+        except Exception as e:
+            print(f"    page title lookup failed: {e!r}")
 
         if not await self.check_session_valid():
             print("[!] Session expired or not logged in.")
@@ -415,35 +427,35 @@ class Unit4Browser:
             print("    Session saved for future use.")
             await asyncio.sleep(2)
 
-        # Navigate to Zeiterfassung (try both DE and EN menu text). Since we
-        # use domcontentloaded (see line 403), the side-menu may not be rendered
-        # yet — wait explicitly per locale before clicking.
-        print("[*] Opening Zeiterfassung...", end=" ", flush=True)
+        # Navigate to Zeiterfassung. Try both DE and EN menu text — explicit
+        # per-locale wait_for tolerates slow SPA hydration.
+        print("[*] Opening Zeiterfassung...", flush=True)
         clicked = False
         for locale in ("de", "en"):
             if clicked:
                 break
+            menu_text = LOCALE_STRINGS[locale]["menu_text"]
+            menu = self.page.get_by_text(menu_text, exact=True).first
+            print(f"    waiting for '{menu_text}' (locale={locale})...", end=" ", flush=True)
             try:
-                menu_text = LOCALE_STRINGS[locale]["menu_text"]
-                menu = self.page.get_by_text(menu_text, exact=True).first
-                await menu.wait_for(state="visible", timeout=10000)
+                await menu.wait_for(state="visible", timeout=30000)
+                print("visible, clicking...", end=" ", flush=True)
                 await menu.click(timeout=5000)
-                print("clicked...", end=" ", flush=True)
+                print("clicked")
                 clicked = True
-            except Exception:
-                continue
+            except Exception as e:
+                print(f"miss ({type(e).__name__})")
         if not clicked:
-            print()
             print("[!] Navigate to Zeiterfassung manually, then ENTER...")
             try:
                 await asyncio.get_event_loop().run_in_executor(None, input)
             except EOFError:
                 pass
 
-        # Wait for page to fully load. See line 403 comment — `networkidle`
-        # does not settle on Unit4. Subsequent frame-retry loop covers timing.
-        print("waiting...", end=" ", flush=True)
-        await self.page.wait_for_load_state("domcontentloaded")
+        # No explicit wait_for_load_state after the click — the frame-retry
+        # loop below polls for the week/period field and is the canonical
+        # ready-signal. See issue #11 for the networkidle/domcontentloaded
+        # discussion.
 
         # Wait until week/period input field is visible
         frame = None
