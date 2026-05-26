@@ -1117,7 +1117,6 @@ class Unit4Browser:
                 await asyncio.sleep(1)
 
             await self._expand_zeitdetails(frame)
-            await asyncio.sleep(1.5)
 
             date_to_label = await self._read_zeitdetails_structure(frame)
 
@@ -1224,28 +1223,20 @@ class Unit4Browser:
             pass
         return True
 
-    async def _expand_zeitdetails(self, frame: Frame) -> bool:
+    async def _expand_zeitdetails(self, frame: Frame):
         """Expand the Zeitdetails section if collapsed."""
+
+        expansion = frame.locator("#b__dialog [class='MinimiseSection'] [aria-expanded]").describe("time details expansion button")
+        await expect(expansion).to_be_visible()
+
         # Quick check: is any day row already visible?
-        day_row = frame.locator(f"text=/^{DAY_ABBREV_PATTERN} \\d+[\\/.]\\d+/").first
-        try:
-            if await day_row.count() > 0 and await day_row.is_visible(timeout=300):
-                return True
-        except Exception:
-            pass
+        if await expansion.get_attribute("aria-expanded") == "true":
+            return
 
-        # Not expanded — click the legend
-        for td_text in ("Zeitdetails", "Time details"):
-            try:
-                legend = frame.locator(f"legend:has-text('{td_text}')").first
-                if await legend.count() > 0 and await legend.is_visible(timeout=300):
-                    await legend.click(timeout=self._timeout)
-                    await asyncio.sleep(1)
-                    return True
-            except Exception:
-                continue
+        # Click the Zeitdetails / Time details header
+        await expansion.click()
+        await expect(expansion).to_have_attribute("aria-expanded", "true")
 
-        return False
 
     async def _read_zeitdetails_structure(self, frame: Frame) -> dict[str, str]:
         """Read the Zeitdetails table structure."""
@@ -1375,10 +1366,10 @@ class Unit4Browser:
             saved = True
 
         if saved:
-            await asyncio.sleep(2)
-            await self._click_button(frame, "OK")
-            await self._click_button(self.page, "OK")
-            await asyncio.sleep(1)
+            ok_btn = self.page.locator("[data-u4id*='success_OK']").describe("Save success OK button")
+            await expect(ok_btn).to_be_visible()
+            await ok_btn.click()
+            await expect(ok_btn).to_be_hidden()
 
         return saved
 

@@ -227,7 +227,7 @@ class TrackingLog:
 
     def log_create(self, wl: TempoWorklog) -> None:
         self._append(
-            f"CREATE [WL:{wl.worklog_id}] {wl.issue_key} {wl.hours}h {wl.arbauft}\n"
+            f"CREATE [WL:{wl.worklog_id}] {wl.issue_key} {wl.hours}h {wl.arbauft} {wl.description[:30]}\n"
         )
 
     def close_block(self, save_status: str, capture_ref: str | None = None) -> None:
@@ -669,7 +669,7 @@ async def sync(
         source_counts[src_label] = source_counts.get(src_label, 0) + 1
         print(
             f"    {wl.date} | {wl.hours:5.2f}h | {wl.issue_key:<15} | "
-            f"{wl.arbauft} [{src_label}] [WL:{wl.worklog_id}]"
+            f"{wl.arbauft} [{src_label}] [WL:{wl.worklog_id}] {wl.description[:30]}"
         )
         total_hours += wl.hours
     print(f"    {'─' * 60}")
