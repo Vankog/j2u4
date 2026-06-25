@@ -470,7 +470,7 @@ class Unit4Browser:
             # and no amount of extra waiting will help.
             loc = self.page.get_by_text(text, exact=True).first
             try:
-                await loc.wait_for(state="visible", timeout=5000)
+                await loc.wait_for(state="visible", timeout=10000)
                 return locale_name, loc
             except Exception:
                 return None
