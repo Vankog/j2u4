@@ -1195,19 +1195,9 @@ class Unit4Browser:
                 # Find active input
                 active_input = None
 
-                candidate = frame.locator("input:focus").first
+                candidate = erfasst_cell.locator("input[data-type='Double']")
                 if await candidate.count() > 0:
                     active_input = candidate
-
-                if not active_input:
-                    candidate = erfasst_cell.locator("input:not([readonly])").first
-                    if await candidate.count() > 0:
-                        active_input = candidate
-
-                if not active_input:
-                    candidate = frame.locator("input[data-type='Double']:not([readonly]):not([disabled])").first
-                    if await candidate.count() > 0:
-                        active_input = candidate
 
                 if active_input and await active_input.count() > 0:
                     try:
