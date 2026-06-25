@@ -1387,7 +1387,7 @@ class Unit4Browser:
 
         if saved:
             ok_btn = self.page.locator("[data-u4id*='success_OK']").describe("Save success OK button")
-            await expect(ok_btn).to_be_visible()
+            await expect(ok_btn).to_be_visible(timeout=10000)
             await ok_btn.click()
             await expect(ok_btn).to_be_hidden()
 
