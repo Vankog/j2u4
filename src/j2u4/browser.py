@@ -1003,9 +1003,8 @@ class Unit4Browser:
         )
         print("OK" if arbauft_ok else "FAIL", end=" | ", flush=True)
 
-        # Wait for Aktivität to be enabled (ArbAuft postback). 8s leaves
-        # headroom for slower sessions — observed UNVOLLSTÄNDIG with 4s.
-        await self._wait_for_enabled(frame, "input[id*='1680_Editor']", timeout_s=8.0)
+        # Wait for project to be auto-filled by ArbAuft selection.
+        await frame.locator("#b__dialog input[id*='1679_Editor'][readonly]").wait_for(state="visible", timeout=8000)
 
         # Aktivität is an ARIA combobox. fill("TEMPO") snaps to NOTEMPO
         # because Unit4 selects the first alphabetical match. Workaround:
